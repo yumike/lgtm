@@ -25,4 +25,4 @@ tracing = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 pretty_assertions = { workspace = true }
-axum-test = "16"
+axum-test = "17"
