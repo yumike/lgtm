@@ -1,0 +1,10 @@
+[package]
+name = "lgtm-assets"
+description = "Frontend asset serving for lgtm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+mime_guess = "2"

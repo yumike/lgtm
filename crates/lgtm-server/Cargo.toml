@@ -1,0 +1,28 @@
+[package]
+name = "lgtm-server"
+description = "HTTP server for lgtm code review tool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+lgtm-session = { workspace = true }
+lgtm-git = { workspace = true }
+lgtm-assets = { workspace = true }
+
+axum = { version = "0.8", features = ["ws", "macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["compression-gzip", "trace"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+ulid = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+pretty_assertions = { workspace = true }
+axum-test = "16"

@@ -1,0 +1,22 @@
+[package]
+name = "lgtm"
+description = "Local code review tool for AI-assisted development"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lgtm"
+path = "src/main.rs"
+
+[dependencies]
+lgtm-session = { workspace = true }
+lgtm-git = { workspace = true }
+lgtm-server = { workspace = true }
+
+clap = { version = "4", features = ["derive"] }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }

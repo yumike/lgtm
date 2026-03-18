@@ -1,1 +1,7 @@
 .worktrees/
+target/
+node_modules/
+packages/web/dist/
+.review/
+.superpowers/
+.DS_Store
