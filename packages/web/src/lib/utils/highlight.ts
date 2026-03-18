@@ -1,30 +1,28 @@
-import { createHighlighterCore } from 'shiki/core';
-import { createJavaScriptRegExpEngine } from 'shiki/engine/javascript';
-import type { HighlighterCore } from 'shiki/core';
+import { createHighlighter } from 'shiki';
+import type { Highlighter } from 'shiki';
 
-let highlighter: HighlighterCore | null = null;
+let highlighter: Highlighter | null = null;
 
 const defaultLangs = [
-  import('shiki/langs/javascript'),
-  import('shiki/langs/typescript'),
-  import('shiki/langs/python'),
-  import('shiki/langs/rust'),
-  import('shiki/langs/go'),
-  import('shiki/langs/css'),
-  import('shiki/langs/html'),
-  import('shiki/langs/json'),
-  import('shiki/langs/yaml'),
-  import('shiki/langs/bash'),
-  import('shiki/langs/markdown'),
-];
+  'javascript',
+  'typescript',
+  'python',
+  'rust',
+  'go',
+  'css',
+  'html',
+  'json',
+  'yaml',
+  'bash',
+  'markdown',
+] as const;
 
-export async function getHighlighter(): Promise<HighlighterCore> {
+export async function getHighlighter(): Promise<Highlighter> {
   if (highlighter) return highlighter;
 
-  highlighter = await createHighlighterCore({
-    themes: [import('shiki/themes/github-dark')],
-    langs: defaultLangs,
-    engine: createJavaScriptRegExpEngine(),
+  highlighter = await createHighlighter({
+    themes: ['github-dark'],
+    langs: [...defaultLangs],
   });
 
   return highlighter;
