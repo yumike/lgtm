@@ -1,10 +1,12 @@
 <script lang="ts">
   import type { DiffLine as DiffLineType } from '../types';
+  import type { ThemedToken } from 'shiki';
   import NewComment from './NewComment.svelte';
 
-  let { line, filePath }: {
+  let { line, filePath, tokens }: {
     line: DiffLineType;
     filePath: string;
+    tokens?: ThemedToken[];
   } = $props();
 
   let showNewComment = $state(false);
@@ -20,7 +22,15 @@
   <span class="line-marker">
     {line.kind === 'add' ? '+' : line.kind === 'delete' ? '-' : ' '}
   </span>
-  <span class="line-content">{line.content}</span>
+  <span class="line-content">
+    {#if tokens && tokens.length > 0}
+      {#each tokens as token}
+        <span style="color: {token.color ?? 'inherit'}">{token.content}</span>
+      {/each}
+    {:else}
+      {line.content}
+    {/if}
+  </span>
 </div>
 {#if showNewComment}
   <NewComment
