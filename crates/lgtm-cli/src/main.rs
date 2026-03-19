@@ -37,6 +37,27 @@ enum Commands {
         stdin: bool,
     },
 
+    /// Create an agent-initiated review thread
+    Thread {
+        /// File path relative to repo root
+        #[arg(long)]
+        file: String,
+        /// Start line number (1-indexed)
+        #[arg(long)]
+        line: u32,
+        /// End line number (defaults to --line)
+        #[arg(long)]
+        line_end: Option<u32>,
+        /// Severity: critical, warning, or info
+        #[arg(long)]
+        severity: String,
+        /// Observation body (omit to read from --stdin)
+        body: Option<String>,
+        /// Read body from stdin
+        #[arg(long)]
+        stdin: bool,
+    },
+
     /// Start a review session
     Start {
         /// Base branch or commit to diff against
@@ -68,6 +89,9 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Status { json } => status(json)?,
         Commands::Reply { thread_id, body, stdin } => reply(thread_id, body, stdin)?,
+        Commands::Thread { file, line, line_end, severity, body, stdin } => {
+            create_thread(file, line, line_end, severity, body, stdin)?
+        }
         Commands::Start {
             base,
             port,
@@ -250,6 +274,91 @@ fn reply(thread_id: String, body: Option<String>, stdin: bool) -> Result<()> {
     lgtm_session::write_session_atomic(&session_path, &session)
         .context("Failed to write session")?;
 
+    Ok(())
+}
+
+fn create_thread(
+    file: String,
+    line: u32,
+    line_end: Option<u32>,
+    severity: String,
+    body: Option<String>,
+    stdin: bool,
+) -> Result<()> {
+    let body = read_body(body, stdin)?;
+    let line_end = line_end.unwrap_or(line);
+
+    let severity = match severity.as_str() {
+        "critical" => lgtm_session::Severity::Critical,
+        "warning" => lgtm_session::Severity::Warning,
+        "info" => lgtm_session::Severity::Info,
+        other => bail!("Invalid severity: {other}. Must be critical, warning, or info"),
+    };
+
+    let repo_path = find_repo_root()?;
+    let session_path = repo_path.join(".review").join("session.json");
+    let lock_path = repo_path.join(".review").join(".lock");
+
+    if !session_path.exists() {
+        std::process::exit(2);
+    }
+
+    let _lock = lgtm_session::acquire_lock(&lock_path)
+        .context("Failed to acquire lock")?;
+
+    let mut session = lgtm_session::read_session(&session_path)
+        .context("Failed to read session")?;
+
+    if session.status != SessionStatus::InProgress {
+        eprintln!("Error: session is not active (status: {:?})", session.status);
+        std::process::exit(6);
+    }
+
+    let file_path = repo_path.join(&file);
+    if !file_path.exists() {
+        eprintln!("Error: file not found: {file}");
+        std::process::exit(5);
+    }
+
+    let contents = std::fs::read_to_string(&file_path)
+        .context("Failed to read file")?;
+    let lines: Vec<&str> = contents.lines().collect();
+
+    if line == 0 || line as usize > lines.len() {
+        eprintln!("Error: line {line} out of range (file has {} lines)", lines.len());
+        std::process::exit(5);
+    }
+
+    let anchor_context = lines[(line - 1) as usize].to_string();
+    let head = git_head(&repo_path)?;
+    let thread_id = ulid::Ulid::new().to_string();
+
+    let thread = lgtm_session::Thread {
+        id: thread_id.clone(),
+        origin: lgtm_session::Origin::Agent,
+        severity: Some(severity),
+        status: lgtm_session::ThreadStatus::Open,
+        file,
+        line_start: line,
+        line_end,
+        diff_side: lgtm_session::DiffSide::Right,
+        anchor_context,
+        comments: vec![lgtm_session::Comment {
+            id: ulid::Ulid::new().to_string(),
+            author: lgtm_session::Author::Agent,
+            body,
+            timestamp: chrono::Utc::now(),
+            diff_snapshot: Some(head),
+        }],
+    };
+
+    session.threads.push(thread);
+    session.updated_at = chrono::Utc::now();
+
+    lgtm_session::write_session_atomic(&session_path, &session)
+        .context("Failed to write session")?;
+
+    println!("{thread_id}");
     Ok(())
 }
 
