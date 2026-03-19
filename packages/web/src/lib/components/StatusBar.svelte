@@ -9,7 +9,9 @@
   let totalFiles = $derived($diffFiles.length);
   let reviewedFiles = $derived(Object.values($session?.files ?? {}).filter(s => s === 'reviewed').length);
 
-  let canApprove = $derived(openCount === 0 && reviewedFiles >= totalFiles && totalFiles > 0);
+  let isApproved = $derived($session?.status === 'approved');
+  let isAbandoned = $derived($session?.status === 'abandoned');
+  let canApprove = $derived(!isApproved && !isAbandoned && openCount === 0 && reviewedFiles >= totalFiles && totalFiles > 0);
 
   async function approve() {
     if (!canApprove) return;
@@ -21,8 +23,13 @@
   }
 </script>
 
-<footer class="status-bar">
+<footer class="status-bar" class:approved={isApproved} class:abandoned={isAbandoned}>
   <div class="status-left">
+    {#if isApproved}
+      <span class="status-badge approved-badge">Approved</span>
+    {:else if isAbandoned}
+      <span class="status-badge abandoned-badge">Abandoned</span>
+    {/if}
     <span>{openCount} open</span>
     <span>&middot;</span>
     <span>{resolvedCount} resolved</span>
@@ -34,9 +41,13 @@
     <span>{reviewedFiles}/{totalFiles} files reviewed</span>
   </div>
   <div class="status-right">
-    <button class="btn-approve" disabled={!canApprove} onclick={approve}>
-      Approve session
-    </button>
+    {#if isApproved}
+      <span class="approved-text">Session approved</span>
+    {:else}
+      <button class="btn-approve" disabled={!canApprove} onclick={approve}>
+        Approve session
+      </button>
+    {/if}
   </div>
 </footer>
 
@@ -70,5 +81,36 @@
   .btn-approve:disabled {
     opacity: 0.3;
     cursor: not-allowed;
+  }
+
+  .status-bar.approved {
+    border-top: 1px solid #238636;
+    background: #0d1117;
+  }
+
+  .status-bar.abandoned {
+    border-top: 1px solid #da3633;
+  }
+
+  .status-badge {
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+  }
+
+  .approved-badge {
+    background: #238636;
+    color: white;
+  }
+
+  .abandoned-badge {
+    background: #da3633;
+    color: white;
+  }
+
+  .approved-text {
+    color: #3fb950;
+    font-weight: 600;
   }
 </style>
