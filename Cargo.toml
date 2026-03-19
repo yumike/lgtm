@@ -49,3 +49,4 @@ libc = "0.2"
 # Testing
 tempfile = "3"
 pretty_assertions = "1"
+assert_cmd = "2"
