@@ -49,6 +49,7 @@ pub async fn create_thread(
             author,
             body: body.body,
             timestamp: now,
+            diff_snapshot: None,
         }],
     };
 
@@ -84,6 +85,7 @@ pub async fn add_comment(
         author: Author::Developer,
         body: body.body,
         timestamp: now,
+        diff_snapshot: None,
     };
 
     thread.comments.push(comment.clone());

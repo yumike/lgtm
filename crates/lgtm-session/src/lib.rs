@@ -79,6 +79,8 @@ pub struct Comment {
     pub author: Author,
     pub body: String,
     pub timestamp: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_snapshot: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,6 +200,7 @@ mod tests {
                     author: Author::Developer,
                     body: "This needs error handling".into(),
                     timestamp: chrono::Utc::now(),
+                    diff_snapshot: None,
                 },
             ],
         };
@@ -284,5 +287,32 @@ mod tests {
         assert_eq!(session.status, SessionStatus::InProgress);
         assert!(session.threads.is_empty());
         assert!(session.files.is_empty());
+    }
+
+    #[test]
+    fn test_comment_diff_snapshot_roundtrip() {
+        let comment = Comment {
+            id: "c_test".into(),
+            author: Author::Agent,
+            body: "Fixed it".into(),
+            timestamp: chrono::Utc::now(),
+            diff_snapshot: Some("abc1234".into()),
+        };
+        let json = serde_json::to_string(&comment).unwrap();
+        assert!(json.contains("\"diff_snapshot\":\"abc1234\""));
+        let deserialized: Comment = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.diff_snapshot, Some("abc1234".into()));
+    }
+
+    #[test]
+    fn test_comment_without_diff_snapshot_defaults_to_none() {
+        let json = r#"{
+            "id": "c_test",
+            "author": "developer",
+            "body": "hello",
+            "timestamp": "2026-03-18T14:22:00Z"
+        }"#;
+        let comment: Comment = serde_json::from_str(json).unwrap();
+        assert_eq!(comment.diff_snapshot, None);
     }
 }
