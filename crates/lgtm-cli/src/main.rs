@@ -172,10 +172,6 @@ async fn start(base: Option<String>, port: u16, host: String, no_open: bool) -> 
 }
 
 fn status(json: bool) -> Result<()> {
-    if !json {
-        bail!("Only --json output is currently supported. Usage: lgtm status --json");
-    }
-
     let repo_path = find_repo_root()?;
     let session_path = repo_path.join(".review").join("session.json");
 
@@ -188,21 +184,63 @@ fn status(json: bool) -> Result<()> {
 
     let stats = lgtm_session::compute_stats(&session);
 
-    let open_threads: Vec<&lgtm_session::Thread> = session
-        .threads
-        .iter()
-        .filter(|t| t.status == lgtm_session::ThreadStatus::Open)
-        .collect();
+    if json {
+        let open_threads: Vec<&lgtm_session::Thread> = session
+            .threads
+            .iter()
+            .filter(|t| t.status == lgtm_session::ThreadStatus::Open)
+            .collect();
 
-    let output = serde_json::json!({
-        "session_status": session.status,
-        "base": session.base,
-        "head": session.head,
-        "stats": stats,
-        "open_threads": open_threads,
-    });
+        let output = serde_json::json!({
+            "session_status": session.status,
+            "base": session.base,
+            "head": session.head,
+            "stats": stats,
+            "open_threads": open_threads,
+        });
 
-    println!("{}", serde_json::to_string_pretty(&output)?);
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        let files_reviewed = session
+            .files
+            .values()
+            .filter(|s| **s == lgtm_session::FileReviewStatus::Reviewed)
+            .count();
+        let files_total = session.files.len();
+
+        let elapsed = chrono::Utc::now() - session.created_at;
+        let elapsed_str = if elapsed.num_hours() > 0 {
+            format!("{} hours ago", elapsed.num_hours())
+        } else {
+            format!("{} minutes ago", elapsed.num_minutes())
+        };
+
+        println!("lgtm: reviewing {} against {}", session.head, session.base);
+
+        let mut parts = Vec::new();
+        if stats.open > 0 {
+            parts.push(format!("{} open", stats.open));
+        }
+        if stats.resolved > 0 {
+            parts.push(format!("{} resolved", stats.resolved));
+        }
+        if stats.wontfix > 0 {
+            parts.push(format!("{} wontfix", stats.wontfix));
+        }
+        if stats.dismissed > 0 {
+            parts.push(format!("{} dismissed", stats.dismissed));
+        }
+
+        if stats.total_threads > 0 {
+            println!("  {} threads: {}", stats.total_threads, parts.join(", "));
+        } else {
+            println!("  No threads yet");
+        }
+
+        println!("  {}/{} files reviewed", files_reviewed, files_total);
+        println!("  Session started {}", elapsed_str);
+    }
+
     Ok(())
 }
 
