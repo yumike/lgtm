@@ -105,6 +105,39 @@ pub enum SessionError {
     Json(#[from] serde_json::Error),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Stats {
+    pub total_threads: usize,
+    pub open: usize,
+    pub resolved: usize,
+    pub wontfix: usize,
+    pub dismissed: usize,
+    pub agent_initiated: usize,
+}
+
+pub fn compute_stats(session: &Session) -> Stats {
+    let mut stats = Stats {
+        total_threads: session.threads.len(),
+        open: 0,
+        resolved: 0,
+        wontfix: 0,
+        dismissed: 0,
+        agent_initiated: 0,
+    };
+    for thread in &session.threads {
+        match thread.status {
+            ThreadStatus::Open => stats.open += 1,
+            ThreadStatus::Resolved => stats.resolved += 1,
+            ThreadStatus::Wontfix => stats.wontfix += 1,
+            ThreadStatus::Dismissed => stats.dismissed += 1,
+        }
+        if thread.origin == Origin::Agent {
+            stats.agent_initiated += 1;
+        }
+    }
+    stats
+}
+
 impl Session {
     pub fn new(base: &str, head: &str, merge_base: &str) -> Self {
         let now = Utc::now();
@@ -314,5 +347,47 @@ mod tests {
         }"#;
         let comment: Comment = serde_json::from_str(json).unwrap();
         assert_eq!(comment.diff_snapshot, None);
+    }
+
+    #[test]
+    fn test_compute_stats_empty() {
+        let session = Session::new("main", "feature/test", "abc1234");
+        let stats = compute_stats(&session);
+        assert_eq!(stats.total_threads, 0);
+        assert_eq!(stats.open, 0);
+        assert_eq!(stats.resolved, 0);
+        assert_eq!(stats.wontfix, 0);
+        assert_eq!(stats.dismissed, 0);
+        assert_eq!(stats.agent_initiated, 0);
+    }
+
+    #[test]
+    fn test_compute_stats_mixed_threads() {
+        let mut session = Session::new("main", "feature/test", "abc1234");
+        let make_thread = |status: ThreadStatus, origin: Origin| Thread {
+            id: ulid::Ulid::new().to_string(),
+            origin,
+            severity: if origin == Origin::Agent { Some(Severity::Warning) } else { None },
+            status,
+            file: "test.rs".into(),
+            line_start: 1,
+            line_end: 1,
+            diff_side: DiffSide::Right,
+            anchor_context: "test".into(),
+            comments: vec![],
+        };
+        session.threads.push(make_thread(ThreadStatus::Open, Origin::Developer));
+        session.threads.push(make_thread(ThreadStatus::Resolved, Origin::Developer));
+        session.threads.push(make_thread(ThreadStatus::Wontfix, Origin::Developer));
+        session.threads.push(make_thread(ThreadStatus::Open, Origin::Agent));
+        session.threads.push(make_thread(ThreadStatus::Dismissed, Origin::Agent));
+
+        let stats = compute_stats(&session);
+        assert_eq!(stats.total_threads, 5);
+        assert_eq!(stats.open, 2);
+        assert_eq!(stats.resolved, 1);
+        assert_eq!(stats.wontfix, 1);
+        assert_eq!(stats.dismissed, 1);
+        assert_eq!(stats.agent_initiated, 2);
     }
 }
