@@ -19,6 +19,13 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Commands {
+    /// Show review session status
+    Status {
+        /// Output as JSON (required for now)
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Start a review session
     Start {
         /// Base branch or commit to diff against
@@ -48,6 +55,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Status { json } => status(json)?,
         Commands::Start {
             base,
             port,
@@ -123,6 +131,41 @@ async fn start(base: String, port: u16, host: String, no_open: bool) -> Result<(
 
     axum::serve(listener, app).await?;
 
+    Ok(())
+}
+
+fn status(json: bool) -> Result<()> {
+    if !json {
+        bail!("Only --json output is currently supported. Usage: lgtm status --json");
+    }
+
+    let repo_path = find_repo_root()?;
+    let session_path = repo_path.join(".review").join("session.json");
+
+    if !session_path.exists() {
+        std::process::exit(2);
+    }
+
+    let session = lgtm_session::read_session(&session_path)
+        .context("Failed to read session")?;
+
+    let stats = lgtm_session::compute_stats(&session);
+
+    let open_threads: Vec<&lgtm_session::Thread> = session
+        .threads
+        .iter()
+        .filter(|t| t.status == lgtm_session::ThreadStatus::Open)
+        .collect();
+
+    let output = serde_json::json!({
+        "session_status": session.status,
+        "base": session.base,
+        "head": session.head,
+        "stats": stats,
+        "open_threads": open_threads,
+    });
+
+    println!("{}", serde_json::to_string_pretty(&output)?);
     Ok(())
 }
 
