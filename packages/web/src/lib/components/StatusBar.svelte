@@ -3,15 +3,31 @@
   import { diffFiles } from '../stores/diff';
   import { patchSession } from '../api';
 
-  let openCount = $derived($session?.threads.filter(t => t.status === 'open').length ?? 0);
-  let resolvedCount = $derived($session?.threads.filter(t => t.status === 'resolved').length ?? 0);
-  let wontfixCount = $derived($session?.threads.filter(t => t.status === 'wontfix').length ?? 0);
+  let threads = $derived($session?.threads ?? []);
+  let openCount = $derived(threads.filter(t => t.status === 'open').length);
+  let resolvedCount = $derived(threads.filter(t => t.status === 'resolved').length);
+  let wontfixCount = $derived(threads.filter(t => t.status === 'wontfix').length);
+  let dismissedCount = $derived(threads.filter(t => t.status === 'dismissed').length);
   let totalFiles = $derived($diffFiles.length);
   let reviewedFiles = $derived(Object.values($session?.files ?? {}).filter(s => s === 'reviewed').length);
 
+  // Approve requires:
+  // - developer threads: all resolved or wontfix
+  // - agent threads: all resolved or dismissed
+  let devThreadsCleared = $derived(
+    threads.filter(t => t.origin !== 'agent').every(t => t.status === 'resolved' || t.status === 'wontfix')
+  );
+  let agentThreadsCleared = $derived(
+    threads.filter(t => t.origin === 'agent').every(t => t.status === 'resolved' || t.status === 'dismissed')
+  );
+
   let isApproved = $derived($session?.status === 'approved');
   let isAbandoned = $derived($session?.status === 'abandoned');
-  let canApprove = $derived(!isApproved && !isAbandoned && openCount === 0 && reviewedFiles >= totalFiles && totalFiles > 0);
+  let canApprove = $derived(
+    !isApproved && !isAbandoned && openCount === 0 &&
+    devThreadsCleared && agentThreadsCleared &&
+    reviewedFiles >= totalFiles && totalFiles > 0
+  );
 
   async function approve() {
     if (!canApprove) return;
@@ -36,6 +52,10 @@
     {#if wontfixCount > 0}
       <span>&middot;</span>
       <span>{wontfixCount} won't fix</span>
+    {/if}
+    {#if dismissedCount > 0}
+      <span>&middot;</span>
+      <span>{dismissedCount} dismissed</span>
     {/if}
     <span>&middot;</span>
     <span>{reviewedFiles}/{totalFiles} files reviewed</span>

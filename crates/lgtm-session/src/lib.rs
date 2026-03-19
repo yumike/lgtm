@@ -28,6 +28,10 @@ pub enum SessionStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Thread {
     pub id: String,
+    #[serde(default)]
+    pub origin: Origin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<Severity>,
     pub status: ThreadStatus,
     pub file: String,
     pub line_start: u32,
@@ -35,6 +39,22 @@ pub struct Thread {
     pub diff_side: DiffSide,
     pub anchor_context: String,
     pub comments: Vec<Comment>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin {
+    #[default]
+    Developer,
+    Agent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    Critical,
+    Warning,
+    Info,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +184,8 @@ mod tests {
     fn test_thread_with_comments_roundtrip() {
         let thread = Thread {
             id: ulid::Ulid::new().to_string(),
+            origin: Origin::Developer,
+            severity: None,
             status: ThreadStatus::Open,
             file: "src/main.rs".into(),
             line_start: 10,
@@ -184,6 +206,48 @@ mod tests {
         assert_eq!(thread.id, deserialized.id);
         assert_eq!(thread.comments.len(), 1);
         assert_eq!(deserialized.comments[0].author, Author::Developer);
+        assert_eq!(deserialized.origin, Origin::Developer);
+        assert_eq!(deserialized.severity, None);
+    }
+
+    #[test]
+    fn test_agent_thread_with_severity() {
+        let thread = Thread {
+            id: ulid::Ulid::new().to_string(),
+            origin: Origin::Agent,
+            severity: Some(Severity::Warning),
+            status: ThreadStatus::Open,
+            file: "src/main.rs".into(),
+            line_start: 5,
+            line_end: 5,
+            diff_side: DiffSide::Right,
+            anchor_context: "API_KEY = \"secret\"".into(),
+            comments: vec![],
+        };
+        let json = serde_json::to_string(&thread).unwrap();
+        assert!(json.contains("\"origin\":\"agent\""));
+        assert!(json.contains("\"severity\":\"warning\""));
+        let deserialized: Thread = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.origin, Origin::Agent);
+        assert_eq!(deserialized.severity, Some(Severity::Warning));
+    }
+
+    #[test]
+    fn test_thread_without_origin_defaults_to_developer() {
+        // Simulates reading an old session.json that lacks origin/severity
+        let json = r#"{
+            "id": "test",
+            "status": "open",
+            "file": "foo.rs",
+            "line_start": 1,
+            "line_end": 1,
+            "diff_side": "right",
+            "anchor_context": "fn foo()",
+            "comments": []
+        }"#;
+        let thread: Thread = serde_json::from_str(json).unwrap();
+        assert_eq!(thread.origin, Origin::Developer);
+        assert_eq!(thread.severity, None);
     }
 
     // I/O tests (Task 3)

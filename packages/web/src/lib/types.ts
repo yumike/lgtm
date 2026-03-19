@@ -3,6 +3,8 @@ export type ThreadStatus = 'open' | 'resolved' | 'wontfix' | 'dismissed';
 export type DiffSide = 'left' | 'right';
 export type Author = 'developer' | 'agent';
 export type FileReviewStatus = 'pending' | 'reviewed';
+export type Origin = 'developer' | 'agent';
+export type Severity = 'critical' | 'warning' | 'info';
 export type FileChangeKind = 'added' | 'modified' | 'deleted' | 'renamed';
 export type LineKind = 'context' | 'add' | 'delete';
 
@@ -20,6 +22,8 @@ export interface Session {
 
 export interface Thread {
   id: string;
+  origin: Origin;
+  severity?: Severity | null;
   status: ThreadStatus;
   file: string;
   line_start: number;
