@@ -60,9 +60,9 @@ enum Commands {
 
     /// Start a review session
     Start {
-        /// Base branch or commit to diff against
-        #[arg(long, default_value = "main")]
-        base: String,
+        /// Base branch or commit to diff against (auto-detects main/master if omitted)
+        #[arg(long)]
+        base: Option<String>,
 
         /// Web server port
         #[arg(long, default_value = "4567")]
@@ -92,19 +92,20 @@ async fn main() -> Result<()> {
         Commands::Thread { file, line, line_end, severity, body, stdin } => {
             create_thread(file, line, line_end, severity, body, stdin)?
         }
-        Commands::Start {
-            base,
-            port,
-            host,
-            no_open,
-        } => start(base, port, host, no_open).await?,
+        Commands::Start { base, port, host, no_open } => {
+            start(base, port, host, no_open).await?
+        }
     }
 
     Ok(())
 }
 
-async fn start(base: String, port: u16, host: String, no_open: bool) -> Result<()> {
+async fn start(base: Option<String>, port: u16, host: String, no_open: bool) -> Result<()> {
     let repo_path = find_repo_root()?;
+    let base = match base {
+        Some(b) => b,
+        None => detect_base_branch(&repo_path)?,
+    };
     let session_path = repo_path.join(".review").join("session.json");
 
     let provider = CliDiffProvider::new(&repo_path);
@@ -360,6 +361,22 @@ fn create_thread(
 
     println!("{thread_id}");
     Ok(())
+}
+
+fn detect_base_branch(repo_path: &std::path::Path) -> Result<String> {
+    for branch in ["main", "master"] {
+        let output = std::process::Command::new("git")
+            .args(["rev-parse", "--verify", &format!("refs/heads/{branch}")])
+            .current_dir(repo_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .context("Failed to run git")?;
+        if output.success() {
+            return Ok(branch.to_string());
+        }
+    }
+    bail!("Could not detect base branch: neither 'main' nor 'master' exists. Use --base to specify.")
 }
 
 fn find_repo_root() -> Result<PathBuf> {
