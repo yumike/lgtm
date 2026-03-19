@@ -103,6 +103,8 @@ pub enum SessionError {
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("Lock error: {0}")]
+    Lock(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +169,62 @@ pub fn write_session(path: &Path, session: &Session) -> Result<(), SessionError>
     }
     let json = serde_json::to_string_pretty(session)?;
     std::fs::write(path, json)?;
+    Ok(())
+}
+
+pub struct LockGuard {
+    path: std::path::PathBuf,
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+pub fn acquire_lock(lock_path: &Path) -> Result<LockGuard, SessionError> {
+    let max_attempts = 40; // 40 * 50ms = 2s
+    for _ in 0..max_attempts {
+        if lock_path.exists() {
+            if let Ok(contents) = std::fs::read_to_string(lock_path) {
+                if let Ok(pid) = contents.trim().parse::<u32>() {
+                    let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
+                    if !alive {
+                        let _ = std::fs::remove_file(lock_path);
+                    }
+                }
+            }
+        }
+
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(lock_path)
+        {
+            Ok(mut f) => {
+                use std::io::Write;
+                let _ = write!(f, "{}", std::process::id());
+                return Ok(LockGuard {
+                    path: lock_path.to_path_buf(),
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => return Err(SessionError::Io(e)),
+        }
+    }
+    Err(SessionError::Lock("Timed out waiting for lock".into()))
+}
+
+pub fn write_session_atomic(path: &Path, session: &Session) -> Result<(), SessionError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp_path = path.with_extension("json.tmp");
+    let json = serde_json::to_string_pretty(session)?;
+    std::fs::write(&tmp_path, json)?;
+    std::fs::rename(&tmp_path, path)?;
     Ok(())
 }
 
@@ -389,5 +447,51 @@ mod tests {
         assert_eq!(stats.wontfix, 1);
         assert_eq!(stats.dismissed, 1);
         assert_eq!(stats.agent_initiated, 2);
+    }
+
+    #[test]
+    fn test_write_session_atomic_creates_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".review").join("session.json");
+        let session = Session::new("main", "feature/test", "abc1234");
+        write_session_atomic(&path, &session).unwrap();
+        assert!(path.exists());
+        let loaded = read_session(&path).unwrap();
+        assert_eq!(loaded.base, "main");
+    }
+
+    #[test]
+    fn test_write_session_atomic_replaces_existing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".review").join("session.json");
+        let session1 = Session::new("main", "feature/a", "abc");
+        write_session_atomic(&path, &session1).unwrap();
+        let session2 = Session::new("main", "feature/b", "def");
+        write_session_atomic(&path, &session2).unwrap();
+        let loaded = read_session(&path).unwrap();
+        assert_eq!(loaded.head, "feature/b");
+    }
+
+    #[test]
+    fn test_lock_and_unlock() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let lock_path = dir.path().join(".review").join(".lock");
+        std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        let guard = acquire_lock(&lock_path).unwrap();
+        assert!(lock_path.exists());
+        drop(guard);
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn test_stale_lock_is_stolen() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let lock_path = dir.path().join(".review").join(".lock");
+        std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        // Write a lock with a PID that doesn't exist
+        std::fs::write(&lock_path, "999999999").unwrap();
+        let guard = acquire_lock(&lock_path).unwrap();
+        assert!(lock_path.exists());
+        drop(guard);
     }
 }

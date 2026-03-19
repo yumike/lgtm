@@ -43,6 +43,9 @@ open = "5"
 notify = "8"
 notify-debouncer-mini = "0.6"
 
+# System
+libc = "0.2"
+
 # Testing
 tempfile = "3"
 pretty_assertions = "1"
