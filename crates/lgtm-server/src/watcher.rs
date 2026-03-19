@@ -11,13 +11,15 @@ pub fn start_watchers(state: Arc<AppState>) -> Result<(), Box<dyn std::error::Er
     let session_path = state.session_path.clone();
     let repo_path = state.repo_path.clone();
     let tx = state.broadcast_tx.clone();
+    let rt = tokio::runtime::Handle::current();
 
     // Session file watcher (300ms debounce)
     let state_for_session = state.clone();
     let tx_for_session = tx.clone();
     let review_dir = session_path.parent().unwrap().to_path_buf();
+    let rt_session = rt.clone();
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Handle::current();
+        let rt = rt_session;
         let mut debouncer = new_debouncer(
             Duration::from_millis(300),
             move |events: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
@@ -40,13 +42,18 @@ pub fn start_watchers(state: Arc<AppState>) -> Result<(), Box<dyn std::error::Er
         )
         .expect("failed to create session watcher");
 
-        debouncer
+        // Ensure .review directory exists before watching
+        let _ = std::fs::create_dir_all(&review_dir);
+        if let Err(e) = debouncer
             .watcher()
             .watch(
                 review_dir.as_ref(),
                 notify::RecursiveMode::NonRecursive,
             )
-            .expect("failed to watch .review directory");
+        {
+            tracing::warn!("failed to watch .review directory: {e}");
+            return;
+        }
 
         // Keep thread alive
         std::thread::park();
@@ -55,8 +62,9 @@ pub fn start_watchers(state: Arc<AppState>) -> Result<(), Box<dyn std::error::Er
     // Working tree watcher (500ms debounce)
     let state_for_tree = state.clone();
     let repo_path_for_watch = repo_path.clone();
+    let rt_tree = rt.clone();
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Handle::current();
+        let rt = rt_tree;
         let mut debouncer = new_debouncer(
             Duration::from_millis(500),
             move |events: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
