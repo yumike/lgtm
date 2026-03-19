@@ -27,7 +27,14 @@ pub async fn patch_session(
     let mut session = state.session.write().await;
     session.status = body.status;
     session.updated_at = chrono::Utc::now();
-    if let Err(e) = lgtm_session::write_session(&state.session_path, &session) {
+    let lock_path = state.session_path.with_file_name(".lock");
+    let _lock = lgtm_session::acquire_lock(&lock_path).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+    if let Err(e) = lgtm_session::write_session_atomic(&state.session_path, &session) {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),

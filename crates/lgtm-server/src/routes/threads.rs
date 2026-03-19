@@ -134,7 +134,14 @@ pub fn persist_session(
     state: &AppState,
     session: &lgtm_session::Session,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    lgtm_session::write_session(&state.session_path, session).map_err(|e| {
+    let lock_path = state.session_path.with_file_name(".lock");
+    let _lock = lgtm_session::acquire_lock(&lock_path).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+    lgtm_session::write_session_atomic(&state.session_path, session).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
