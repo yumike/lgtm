@@ -24,3 +24,4 @@ open = "5"
 chrono = { workspace = true }
 axum = { version = "0.8" }
 serde_json = { workspace = true }
+ulid = { workspace = true }

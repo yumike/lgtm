@@ -26,6 +26,17 @@ enum Commands {
         json: bool,
     },
 
+    /// Reply to a review thread
+    Reply {
+        /// Thread ID (e.g., t_01J8XYZABC)
+        thread_id: String,
+        /// Comment body (omit to read from --stdin)
+        body: Option<String>,
+        /// Read body from stdin
+        #[arg(long)]
+        stdin: bool,
+    },
+
     /// Start a review session
     Start {
         /// Base branch or commit to diff against
@@ -56,6 +67,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Status { json } => status(json)?,
+        Commands::Reply { thread_id, body, stdin } => reply(thread_id, body, stdin)?,
         Commands::Start {
             base,
             port,
@@ -166,6 +178,78 @@ fn status(json: bool) -> Result<()> {
     });
 
     println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+fn read_body(body: Option<String>, stdin: bool) -> Result<String> {
+    if stdin {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        Ok(buf.trim().to_string())
+    } else if let Some(body) = body {
+        Ok(body)
+    } else {
+        bail!("Provide body as argument or use --stdin");
+    }
+}
+
+fn git_head(repo_path: &std::path::Path) -> Result<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to run git rev-parse HEAD")?;
+    if !output.status.success() {
+        bail!("git rev-parse HEAD failed");
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn reply(thread_id: String, body: Option<String>, stdin: bool) -> Result<()> {
+    let body = read_body(body, stdin)?;
+
+    let repo_path = find_repo_root()?;
+    let session_path = repo_path.join(".review").join("session.json");
+    let lock_path = repo_path.join(".review").join(".lock");
+
+    if !session_path.exists() {
+        std::process::exit(2);
+    }
+
+    let _lock = lgtm_session::acquire_lock(&lock_path)
+        .context("Failed to acquire lock")?;
+
+    let mut session = lgtm_session::read_session(&session_path)
+        .context("Failed to read session")?;
+
+    if session.status != SessionStatus::InProgress {
+        eprintln!("Error: session is not active (status: {:?})", session.status);
+        std::process::exit(6);
+    }
+
+    let thread = session.threads.iter_mut().find(|t| t.id == thread_id);
+    let Some(thread) = thread else {
+        eprintln!("Error: thread not found: {thread_id}");
+        std::process::exit(4);
+    };
+
+    let head = git_head(&repo_path)?;
+
+    let comment = lgtm_session::Comment {
+        id: ulid::Ulid::new().to_string(),
+        author: lgtm_session::Author::Agent,
+        body,
+        timestamp: chrono::Utc::now(),
+        diff_snapshot: Some(head),
+    };
+
+    thread.comments.push(comment);
+    session.updated_at = chrono::Utc::now();
+
+    lgtm_session::write_session_atomic(&session_path, &session)
+        .context("Failed to write session")?;
+
     Ok(())
 }
 
