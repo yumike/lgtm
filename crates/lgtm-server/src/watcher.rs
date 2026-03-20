@@ -24,6 +24,7 @@ pub fn start_watchers(state: Arc<AppState>) -> Result<(), Box<dyn std::error::Er
             Duration::from_millis(300),
             move |events: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
                 if let Ok(events) = events {
+                    let submit_path = session_path.parent().unwrap().join(".submit");
                     let has_session_change = events
                         .iter()
                         .any(|e| e.kind == DebouncedEventKind::Any && e.path == session_path);
@@ -35,6 +36,18 @@ pub fn start_watchers(state: Arc<AppState>) -> Result<(), Box<dyn std::error::Er
                                 *state.session.write().await = session.clone();
                                 let _ = tx.send(WsMessage::SessionUpdated(session));
                             }
+                        });
+                    }
+                    let has_submit_change = events
+                        .iter()
+                        .any(|e| e.kind == DebouncedEventKind::Any && e.path == submit_path);
+                    if has_submit_change {
+                        let pending = submit_path.exists();
+                        let tx = tx_for_session.clone();
+                        rt.spawn(async move {
+                            let _ = tx.send(WsMessage::SubmitStatus(
+                                crate::ws::SubmitStatusData { pending },
+                            ));
                         });
                     }
                 }
