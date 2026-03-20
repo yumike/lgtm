@@ -3,7 +3,8 @@
   import { session } from './lib/stores/session';
   import { diffFiles } from './lib/stores/diff';
   import { selectedFile, error } from './lib/stores/ui';
-  import { getSession, getDiff } from './lib/api';
+  import { submitPending } from './lib/stores/submit';
+  import { getSession, getDiff, getSubmitStatus } from './lib/api';
   import { createWsClient } from './lib/ws';
   import FileTree from './lib/components/FileTree.svelte';
   import DiffView from './lib/components/DiffView.svelte';
@@ -36,6 +37,7 @@
 
   onMount(async () => {
     await loadState();
+    getSubmitStatus().then(s => submitPending.set(s.pending)).catch(() => {});
 
     wsClient = createWsClient(
       (msg) => {
@@ -43,6 +45,8 @@
           session.set(msg.data);
         } else if (msg.type === 'diff_updated') {
           mergeDiffUpdate(msg.data);
+        } else if (msg.type === 'submit_status') {
+          submitPending.set(msg.data.pending);
         }
       },
       loadState,

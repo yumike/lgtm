@@ -1,7 +1,8 @@
 <script lang="ts">
   import { session } from '../stores/session';
   import { diffFiles } from '../stores/diff';
-  import { patchSession } from '../api';
+  import { submitPending } from '../stores/submit';
+  import { patchSession, submitToAgent } from '../api';
 
   let threads = $derived($session?.threads ?? []);
   let openCount = $derived(threads.filter(t => t.status === 'open').length);
@@ -28,6 +29,21 @@
     devThreadsCleared && agentThreadsCleared &&
     reviewedFiles >= totalFiles && totalFiles > 0
   );
+
+  // Submit state — reads from the shared store (updated via WebSocket in App.svelte)
+  let canSubmit = $derived(
+    !isApproved && !isAbandoned && !$submitPending && openCount > 0
+  );
+
+  async function submit() {
+    if (!canSubmit) return;
+    try {
+      await submitToAgent();
+      submitPending.set(true);
+    } catch {
+      // toast
+    }
+  }
 
   async function approve() {
     if (!canApprove) return;
@@ -64,6 +80,13 @@
     {#if isApproved}
       <span class="approved-text">Session approved</span>
     {:else}
+      <button class="btn-submit" disabled={!canSubmit} onclick={submit}>
+        {#if $submitPending}
+          Waiting for agent...
+        {:else}
+          Submit to agent
+        {/if}
+      </button>
       <button class="btn-approve" disabled={!canApprove} onclick={approve}>
         Approve session
       </button>
@@ -86,6 +109,26 @@
   .status-left {
     display: flex;
     gap: 8px;
+  }
+
+  .status-right {
+    display: flex;
+    gap: 8px;
+  }
+
+  .btn-submit {
+    padding: 4px 16px;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    background: #21262d;
+    color: #c9d1d9;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .btn-submit:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
   }
 
   .btn-approve {
