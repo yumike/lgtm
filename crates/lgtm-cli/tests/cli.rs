@@ -292,6 +292,135 @@ fn thread_invalid_severity_exits_1() {
         .code(1);
 }
 
+// --- fetch tests ---
+
+#[test]
+fn fetch_no_session_exits_2() {
+    let dir = setup_repo();
+    lgtm()
+        .arg("fetch")
+        .current_dir(dir.path())
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn fetch_abandoned_session_exits_6() {
+    let dir = setup_repo();
+    let json = r#"{
+        "version": 1,
+        "status": "abandoned",
+        "base": "main",
+        "head": "feature/test",
+        "merge_base": "abc1234",
+        "created_at": "2026-03-18T14:00:00Z",
+        "updated_at": "2026-03-18T14:00:00Z",
+        "threads": [],
+        "files": {}
+    }"#;
+    write_session(dir.path(), json);
+    lgtm()
+        .arg("fetch")
+        .current_dir(dir.path())
+        .assert()
+        .code(6);
+}
+
+#[test]
+fn fetch_approved_session_exits_6() {
+    let dir = setup_repo();
+    let json = r#"{
+        "version": 1,
+        "status": "approved",
+        "base": "main",
+        "head": "feature/test",
+        "merge_base": "abc1234",
+        "created_at": "2026-03-18T14:00:00Z",
+        "updated_at": "2026-03-18T14:00:00Z",
+        "threads": [],
+        "files": {}
+    }"#;
+    write_session(dir.path(), json);
+    lgtm()
+        .arg("fetch")
+        .current_dir(dir.path())
+        .assert()
+        .code(6);
+}
+
+#[test]
+fn fetch_returns_immediately_when_marker_exists() {
+    let dir = setup_repo();
+    write_session(dir.path(), &session_json_with_thread());
+    // Create the submit marker
+    std::fs::write(dir.path().join(".review/.submit"), "").unwrap();
+
+    let output = lgtm()
+        .arg("fetch")
+        .current_dir(dir.path())
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let result: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(result["session_status"], "in_progress");
+    assert!(!result["open_threads"].as_array().unwrap().is_empty());
+    // Marker should be deleted
+    assert!(!dir.path().join(".review/.submit").exists());
+}
+
+#[test]
+fn fetch_timeout_returns_timed_out() {
+    let dir = setup_repo();
+    write_session(dir.path(), &session_json_with_thread());
+
+    let output = lgtm()
+        .args(["fetch", "--timeout", "1"])
+        .current_dir(dir.path())
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let result: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(result["timed_out"], true);
+    assert!(result["open_threads"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn fetch_unblocks_when_marker_created() {
+    let dir = setup_repo();
+    write_session(dir.path(), &session_json_with_thread());
+
+    let review_dir = dir.path().join(".review");
+    let submit_path = review_dir.join(".submit");
+
+    // Spawn a thread that creates the marker after 500ms
+    let submit_path_clone = submit_path.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::fs::write(&submit_path_clone, "").unwrap();
+    });
+
+    let output = lgtm()
+        .args(["fetch", "--timeout", "5"])
+        .current_dir(dir.path())
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let result: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(result["session_status"], "in_progress");
+    assert!(!result["open_threads"].as_array().unwrap().is_empty());
+    // Marker should be deleted
+    assert!(!submit_path.exists());
+}
+
 // --- abandoned session tests ---
 
 #[test]
