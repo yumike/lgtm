@@ -25,6 +25,8 @@ chrono = { workspace = true }
 axum = { version = "0.8" }
 serde_json = { workspace = true }
 ulid = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-mini = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

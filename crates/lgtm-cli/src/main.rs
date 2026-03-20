@@ -37,6 +37,13 @@ enum Commands {
         stdin: bool,
     },
 
+    /// Wait for developer to submit review comments, then print open threads
+    Fetch {
+        /// Timeout in seconds (default: wait indefinitely)
+        #[arg(long)]
+        timeout: Option<u64>,
+    },
+
     /// Create an agent-initiated review thread
     Thread {
         /// File path relative to repo root
@@ -88,6 +95,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Status { json } => status(json)?,
+        Commands::Fetch { timeout } => fetch(timeout)?,
         Commands::Reply { thread_id, body, stdin } => reply(thread_id, body, stdin)?,
         Commands::Thread { file, line, line_end, severity, body, stdin } => {
             create_thread(file, line, line_end, severity, body, stdin)?
@@ -421,6 +429,162 @@ fn detect_base_branch(repo_path: &std::path::Path) -> Result<String> {
         }
     }
     bail!("Could not detect base branch: neither 'main' nor 'master' exists. Use --base to specify.")
+}
+
+fn fetch(timeout: Option<u64>) -> Result<()> {
+    let repo_path = find_repo_root()?;
+    let review_dir = repo_path.join(".review");
+    let session_path = review_dir.join("session.json");
+    let submit_path = review_dir.join(".submit");
+
+    if !review_dir.exists() || !session_path.exists() {
+        eprintln!("Error: no review session found");
+        std::process::exit(2);
+    }
+
+    let session = lgtm_session::read_session(&session_path)
+        .context("Failed to read session")?;
+
+    if session.status != SessionStatus::InProgress {
+        eprintln!("Error: session is not active (status: {:?})", session.status);
+        std::process::exit(6);
+    }
+
+    // If marker already exists, pick up immediately
+    if !submit_path.exists() {
+        // Wait for .submit marker or session status change
+        if !wait_for_submit(&review_dir, &submit_path, &session_path, timeout)? {
+            // Timed out
+            let session = lgtm_session::read_session(&session_path)
+                .context("Failed to read session")?;
+            let output = serde_json::json!({
+                "timed_out": true,
+                "session_status": session.status,
+                "base": session.base,
+                "head": session.head,
+                "merge_base": session.merge_base,
+                "open_threads": [],
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+            return Ok(());
+        }
+    }
+
+    // Re-read session (may have changed since we started waiting)
+    let session = lgtm_session::read_session(&session_path)
+        .context("Failed to read session")?;
+
+    // Delete the marker
+    let _ = std::fs::remove_file(&submit_path);
+
+    // Check if session ended while we were waiting
+    if session.status != SessionStatus::InProgress {
+        let output = serde_json::json!({
+            "session_status": session.status,
+            "base": session.base,
+            "head": session.head,
+            "merge_base": session.merge_base,
+            "open_threads": [],
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    let open_threads: Vec<&lgtm_session::Thread> = session
+        .threads
+        .iter()
+        .filter(|t| t.status == lgtm_session::ThreadStatus::Open)
+        .collect();
+
+    let output = serde_json::json!({
+        "session_status": session.status,
+        "base": session.base,
+        "head": session.head,
+        "merge_base": session.merge_base,
+        "open_threads": open_threads,
+    });
+
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+fn wait_for_submit(
+    review_dir: &std::path::Path,
+    submit_path: &std::path::Path,
+    session_path: &std::path::Path,
+    timeout: Option<u64>,
+) -> Result<bool> {
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel();
+
+    let submit_target = submit_path.to_path_buf();
+    let session_target = session_path.to_path_buf();
+    let mut debouncer = notify_debouncer_mini::new_debouncer(
+        std::time::Duration::from_millis(300),
+        move |events: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
+            if let Ok(events) = events {
+                for event in events {
+                    if event.kind == notify_debouncer_mini::DebouncedEventKind::Any {
+                        if event.path == submit_target {
+                            let _ = tx.send(WaitEvent::SubmitCreated);
+                            return;
+                        }
+                        if event.path == session_target {
+                            let _ = tx.send(WaitEvent::SessionChanged);
+                            return;
+                        }
+                    }
+                }
+            }
+        },
+    )
+    .context("Failed to create file watcher")?;
+
+    debouncer
+        .watcher()
+        .watch(review_dir, notify::RecursiveMode::NonRecursive)
+        .context("Failed to watch .review directory")?;
+
+    // Check again after watcher is set up (race condition window)
+    if submit_path.exists() {
+        return Ok(true);
+    }
+
+    let deadline = timeout.map(|s| std::time::Instant::now() + std::time::Duration::from_secs(s));
+
+    loop {
+        let recv_result = if let Some(deadline) = deadline {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(false); // timed out
+            }
+            rx.recv_timeout(remaining)
+        } else {
+            rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+        };
+
+        match recv_result {
+            Ok(WaitEvent::SubmitCreated) => return Ok(true),
+            Ok(WaitEvent::SessionChanged) => {
+                // Check if session status changed to approved/abandoned
+                if let Ok(session) = lgtm_session::read_session(session_path) {
+                    if session.status != SessionStatus::InProgress {
+                        return Ok(true); // session ended, unblock
+                    }
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => return Ok(false),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                bail!("File watcher disconnected unexpectedly");
+            }
+        }
+    }
+}
+
+enum WaitEvent {
+    SubmitCreated,
+    SessionChanged,
 }
 
 fn find_repo_root() -> Result<PathBuf> {
