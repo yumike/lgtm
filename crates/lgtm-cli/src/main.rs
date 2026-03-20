@@ -142,6 +142,12 @@ async fn start(base: Option<String>, port: u16, host: String, no_open: bool) -> 
         session
     };
 
+    // Clean up stale submit marker from previous sessions
+    let submit_path = repo_path.join(".review").join(".submit");
+    if submit_path.exists() {
+        let _ = std::fs::remove_file(&submit_path);
+    }
+
     let (broadcast_tx, _) = tokio::sync::broadcast::channel(64);
 
     let state = Arc::new(lgtm_server::AppState {
