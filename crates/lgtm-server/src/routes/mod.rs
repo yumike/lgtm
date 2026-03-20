@@ -2,6 +2,7 @@ pub mod assets;
 pub mod diff;
 pub mod files;
 pub mod session;
+pub mod submit;
 pub mod threads;
 
 use std::sync::Arc;
@@ -19,4 +20,5 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .route("/threads/{id}/comments", post(threads::add_comment))
         .route("/threads/{id}", patch(threads::patch_thread))
         .route("/files", patch(files::patch_file))
+        .route("/submit", post(submit::post_submit).get(submit::get_submit))
 }
