@@ -64,4 +64,5 @@ export interface DiffLine {
 
 export type WsMessage =
   | { type: 'session_updated'; data: Session }
-  | { type: 'diff_updated'; data: DiffFile[] };
+  | { type: 'diff_updated'; data: DiffFile[] }
+  | { type: 'submit_status'; data: { pending: boolean } };

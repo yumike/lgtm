@@ -73,3 +73,11 @@ export function patchFile(path: string, status: FileReviewStatus): Promise<void>
     body: JSON.stringify({ status }),
   });
 }
+
+export function submitToAgent(): Promise<{ pending: boolean }> {
+  return request('/submit', { method: 'POST' });
+}
+
+export function getSubmitStatus(): Promise<{ pending: boolean }> {
+  return request('/submit');
+}
