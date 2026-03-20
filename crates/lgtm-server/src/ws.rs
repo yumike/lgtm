@@ -12,6 +12,12 @@ use tokio::sync::broadcast;
 pub enum WsMessage {
     SessionUpdated(lgtm_session::Session),
     DiffUpdated(Vec<lgtm_git::DiffFile>),
+    SubmitStatus(SubmitStatusData),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SubmitStatusData {
+    pub pending: bool,
 }
 
 pub async fn ws_handler(
