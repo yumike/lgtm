@@ -1,5 +1,5 @@
 ---
-name: review
+name: lgtm
 description: Address review comments from the lgtm UI. Use when asked to handle code review feedback.
 disable-model-invocation: true
 ---
