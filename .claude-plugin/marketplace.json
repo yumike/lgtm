@@ -1,0 +1,16 @@
+{
+  "name": "lgtm",
+  "owner": {
+    "name": "yumike"
+  },
+  "metadata": {
+    "description": "Plugins for the lgtm local code review tool"
+  },
+  "plugins": [
+    {
+      "name": "lgtm",
+      "source": "./plugins/lgtm",
+      "description": "Code review skill for the lgtm review loop"
+    }
+  ]
+}
