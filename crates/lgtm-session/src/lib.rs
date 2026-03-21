@@ -1,13 +1,15 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
+    pub id: ulid::Ulid,
     pub version: u32,
     pub status: SessionStatus,
+    pub repo_path: PathBuf,
     pub base: String,
     pub head: String,
     pub merge_base: String,
@@ -141,11 +143,13 @@ pub fn compute_stats(session: &Session) -> Stats {
 }
 
 impl Session {
-    pub fn new(base: &str, head: &str, merge_base: &str) -> Self {
+    pub fn new(base: &str, head: &str, merge_base: &str, repo_path: PathBuf) -> Self {
         let now = Utc::now();
         Self {
+            id: ulid::Ulid::new(),
             version: 1,
             status: SessionStatus::InProgress,
+            repo_path,
             base: base.into(),
             head: head.into(),
             merge_base: merge_base.into(),
@@ -236,8 +240,10 @@ mod tests {
     #[test]
     fn test_session_roundtrip() {
         let session = Session {
+            id: ulid::Ulid::new(),
             version: 1,
             status: SessionStatus::InProgress,
+            repo_path: PathBuf::from("/tmp/test"),
             base: "main".into(),
             head: "feature/test".into(),
             merge_base: "abc1234".into(),
@@ -349,7 +355,7 @@ mod tests {
     fn test_write_and_read_session() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join(".review").join("session.json");
-        let session = Session::new("main", "feature/test", "abc1234");
+        let session = Session::new("main", "feature/test", "abc1234", PathBuf::from("/tmp/test"));
         write_session(&path, &session).unwrap();
         let loaded = read_session(&path).unwrap();
         assert_eq!(loaded.version, 1);
@@ -361,7 +367,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join(".review").join("session.json");
         assert!(!path.parent().unwrap().exists());
-        write_session(&path, &Session::new("main", "feature/test", "abc1234")).unwrap();
+        write_session(&path, &Session::new("main", "feature/test", "abc1234", PathBuf::from("/tmp/test"))).unwrap();
         assert!(path.exists());
     }
 
@@ -373,7 +379,7 @@ mod tests {
 
     #[test]
     fn test_create_new_session() {
-        let session = Session::new("main", "feature/test", "abc1234");
+        let session = Session::new("main", "feature/test", "abc1234", PathBuf::from("/tmp/test"));
         assert_eq!(session.version, 1);
         assert_eq!(session.status, SessionStatus::InProgress);
         assert!(session.threads.is_empty());
@@ -409,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_compute_stats_empty() {
-        let session = Session::new("main", "feature/test", "abc1234");
+        let session = Session::new("main", "feature/test", "abc1234", PathBuf::from("/tmp/test"));
         let stats = compute_stats(&session);
         assert_eq!(stats.total_threads, 0);
         assert_eq!(stats.open, 0);
@@ -421,7 +427,7 @@ mod tests {
 
     #[test]
     fn test_compute_stats_mixed_threads() {
-        let mut session = Session::new("main", "feature/test", "abc1234");
+        let mut session = Session::new("main", "feature/test", "abc1234", PathBuf::from("/tmp/test"));
         let make_thread = |status: ThreadStatus, origin: Origin| Thread {
             id: ulid::Ulid::new().to_string(),
             origin,
@@ -453,7 +459,7 @@ mod tests {
     fn test_write_session_atomic_creates_file() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join(".review").join("session.json");
-        let session = Session::new("main", "feature/test", "abc1234");
+        let session = Session::new("main", "feature/test", "abc1234", PathBuf::from("/tmp/test"));
         write_session_atomic(&path, &session).unwrap();
         assert!(path.exists());
         let loaded = read_session(&path).unwrap();
@@ -464,9 +470,9 @@ mod tests {
     fn test_write_session_atomic_replaces_existing() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join(".review").join("session.json");
-        let session1 = Session::new("main", "feature/a", "abc");
+        let session1 = Session::new("main", "feature/a", "abc", PathBuf::from("/tmp/test"));
         write_session_atomic(&path, &session1).unwrap();
-        let session2 = Session::new("main", "feature/b", "def");
+        let session2 = Session::new("main", "feature/b", "def", PathBuf::from("/tmp/test"));
         write_session_atomic(&path, &session2).unwrap();
         let loaded = read_session(&path).unwrap();
         assert_eq!(loaded.head, "feature/b");
@@ -481,6 +487,13 @@ mod tests {
         assert!(lock_path.exists());
         drop(guard);
         assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn test_session_has_id_and_repo_path() {
+        let session = Session::new("main", "feature/foo", "abc123", PathBuf::from("/tmp/repo"));
+        assert!(!session.id.to_string().is_empty());
+        assert_eq!(session.repo_path, PathBuf::from("/tmp/repo"));
     }
 
     #[test]

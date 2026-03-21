@@ -145,7 +145,7 @@ async fn start(base: Option<String>, port: u16, host: String, no_open: bool) -> 
         let merge_base = provider
             .merge_base(&head, &base)
             .context("Failed to compute merge-base")?;
-        let session = Session::new(&base, &head, &merge_base);
+        let session = Session::new(&base, &head, &merge_base, repo_path.clone());
         lgtm_session::write_session_atomic(&session_path, &session)?;
         session
     };

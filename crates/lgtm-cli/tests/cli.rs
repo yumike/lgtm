@@ -41,8 +41,10 @@ fn write_session(dir: &std::path::Path, json: &str) {
 
 fn session_json_with_thread() -> String {
     r#"{
+        "id": "01JNTEST000000000000000001",
         "version": 1,
         "status": "in_progress",
+        "repo_path": "/tmp/test",
         "base": "main",
         "head": "main",
         "merge_base": "abc1234",
@@ -308,8 +310,10 @@ fn fetch_no_session_exits_2() {
 fn fetch_abandoned_session_exits_6() {
     let dir = setup_repo();
     let json = r#"{
+        "id": "01JNTEST000000000000000002",
         "version": 1,
         "status": "abandoned",
+        "repo_path": "/tmp/test",
         "base": "main",
         "head": "feature/test",
         "merge_base": "abc1234",
@@ -330,8 +334,10 @@ fn fetch_abandoned_session_exits_6() {
 fn fetch_approved_session_exits_6() {
     let dir = setup_repo();
     let json = r#"{
+        "id": "01JNTEST000000000000000003",
         "version": 1,
         "status": "approved",
+        "repo_path": "/tmp/test",
         "base": "main",
         "head": "feature/test",
         "merge_base": "abc1234",

@@ -19,7 +19,7 @@ pub async fn create_test_app() -> TestServer {
     // Prevent cleanup so that files created during the test persist for the test's lifetime
     std::mem::forget(dir);
 
-    let session = lgtm_session::Session::new("main", "feature/test", "abc1234");
+    let session = lgtm_session::Session::new("main", "feature/test", "abc1234", repo_path.clone());
     let (broadcast_tx, _) = tokio::sync::broadcast::channel(32);
     let state = Arc::new(AppState {
         session: RwLock::new(session),
