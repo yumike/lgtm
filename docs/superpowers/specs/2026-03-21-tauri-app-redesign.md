@@ -38,15 +38,21 @@ Three components:
 
 Each session identified by a ULID, scoped to repo path + head ref. Same repo on different branches = different sessions.
 
-**In-memory:** `HashMap<SessionId, Session>` with all active sessions. Each session holds repo path, base ref, head ref, merge base, threads, file review status, timestamps, and a WebSocket broadcast channel.
+**Session struct changes:** Add `id: SessionId` (ULID) and `repo_path: PathBuf` fields to the `Session` struct. The `id` is stored inside the JSON, not just derived from the filename.
 
-**On-disk:** `~/.lgtm/sessions/{session_id}.json` — same schema as current session.json plus `repo_path` field. Written atomically on every mutation. On app launch, loads all sessions with status `in_progress`.
+**In-memory:** `HashMap<SessionId, Session>` with all active sessions. Each session holds id, repo path, base ref, head ref, merge base, threads, file review status, timestamps, and a WebSocket broadcast channel.
+
+**On-disk:** `~/.lgtm/sessions/{session_id}.json` — current session schema plus `id` and `repo_path` fields. Written atomically on every mutation. On app launch, loads all sessions with status `in_progress`.
+
+**Submit state:** The submit mechanism becomes a boolean field `submit_pending` on the in-memory session state (not persisted to disk). `POST /api/sessions/{id}/submit` sets it to true and broadcasts `SubmitStatus` over WebSocket. `lgtm fetch` connects via WebSocket and blocks until it receives `SubmitStatus { pending: true }`, then resets the flag.
+
+**Port selection:** The Tauri app binds to port 0 (OS-assigned) to avoid conflicts, then writes the actual port to the lockfile.
 
 **Lockfile:** `~/.lgtm/server.json`
 ```json
 {
   "pid": 1234,
-  "port": 4567
+  "port": 52341
 }
 ```
 Written on app start, deleted on clean shutdown. CLI checks PID liveness to detect stale lockfiles.
@@ -156,18 +162,39 @@ The `.review/session.json` file watcher is removed. State changes go through the
 
 Working tree file watchers are still needed: the Tauri app watches each session's repo directory for file changes to update diffs (same debounced approach as today).
 
+## File watcher deduplication
+
+Sessions sharing the same repo path (e.g. same repo, different branches) share a single file watcher. The app maintains a `HashMap<PathBuf, (WatcherHandle, Vec<SessionId>)>`. When the last session for a repo is removed, the watcher is dropped.
+
+## CLI interface changes
+
+The following CLI flags are removed (no longer applicable since the app owns the server):
+- `--port`, `--host`, `--no-open` on `lgtm start`
+
+The following commands are new:
+- `lgtm approve` — was previously done only via the UI
+- `lgtm abandon` — was previously done only via the UI
+- `lgtm clean` — replaces manual `.review/` cleanup
+
+**Error handling for app launch:** If the Tauri app binary is not found, CLI prints "lgtm app not installed" with install instructions. If the app fails to start within 10s (accounting for macOS Gatekeeper on first launch), CLI prints a timeout error with troubleshooting steps.
+
 ## What stays the same
-- CLI command names and arguments
 - Svelte frontend components (diff view, threads, file tree, status bar)
 - Git diff computation (`lgtm-git` crate)
 - Session data model (threads, comments, file review status)
 - The `/lgtm` skill — same commands, same loop
+- CLI command names (`start`, `status`, `fetch`, `reply`, `thread`, `diff`)
 
 ## What gets removed
 - `.review/` directory in repos
 - `lgtm-assets` crate
 - File watchers for session.json
 - Advisory `.lock` file (single process owns all state)
+- `--port`, `--host`, `--no-open` CLI flags
+
+## Migration
+
+No migration of existing `.review/session.json` files. This is a v2 that starts fresh. Users with in-progress reviews should complete them with the current tool before upgrading. The `.review/` directories can be cleaned up manually or via `git clean`.
 
 ## Breaking change
 Users must install the Tauri app. The CLI binary alone no longer works standalone.
