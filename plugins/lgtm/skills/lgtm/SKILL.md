@@ -21,7 +21,7 @@ When invoked, follow this protocol to address code review comments from the lgtm
 5. If you discover additional issues while fixing (bugs, security problems, missing error handling), raise them:
    `lgtm thread --file <path> --line <n> --severity <level> "description"`
    Do not fix agent-raised issues unless the developer explicitly asks
-6. Commit changes with `[lgtm]` prefix
+6. Commit changes
 7. Report summary: "Addressed N threads in M files. Raised X new observations. Please review in the lgtm UI."
 
 ## CLI commands
@@ -39,12 +39,6 @@ lgtm thread --file src/auth.py --line 71 --severity warning "Hardcoded API key �
 # Check session status without blocking
 lgtm status --json
 ```
-
-## Commit strategy
-
-- Independent fixes → one commit per thread (e.g., `[lgtm] fix: add retry backoff per thread t_01J8XYZABC`)
-- Related changes touching the same code → batch into one commit (e.g., `[lgtm] fix: address auth service review comments`)
-- Trivial fixes (typos, imports) → batch together
 
 ## Rules
 
