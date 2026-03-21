@@ -1,3 +1,6 @@
+pub mod store;
+pub use store::SessionStore;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -107,6 +110,8 @@ pub enum SessionError {
     Json(#[from] serde_json::Error),
     #[error("Lock error: {0}")]
     Lock(String),
+    #[error("Not found: {0}")]
+    NotFound(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
