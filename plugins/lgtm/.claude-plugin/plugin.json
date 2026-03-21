@@ -1,7 +1,7 @@
 {
   "name": "lgtm",
   "description": "Code review skill for the lgtm local review tool. Provides /lgtm:review to address developer comments from the lgtm UI.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "yumike"
   },
