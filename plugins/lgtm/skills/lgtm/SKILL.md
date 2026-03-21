@@ -6,13 +6,15 @@ disable-model-invocation: true
 
 # lgtm review protocol
 
-When invoked, follow this protocol to address code review comments from the lgtm web UI.
+When invoked, enter a review loop that runs until the session is approved or abandoned.
 
 ## Workflow
 
+Loop:
+
 1. Run `lgtm fetch` — blocks until the developer clicks "Submit to agent" in the UI
-2. Check `session_status` in the output. If `approved` or `abandoned`, stop — the session is over
-3. If `open_threads` is empty, report "No open threads to address" and stop
+2. Check `session_status` in the output. If `approved` or `abandoned`, report and stop
+3. If `open_threads` is empty, report "No open threads to address" and go to step 1
 4. For each open thread (grouped by file, top to bottom by line number):
    - Read the referenced file and lines (`file`, `line_start`, `line_end`)
    - Read the full comment history in `comments` to understand what the developer is asking
@@ -23,6 +25,7 @@ When invoked, follow this protocol to address code review comments from the lgtm
    Do not fix agent-raised issues unless the developer explicitly asks
 6. Commit changes
 7. Report summary: "Addressed N threads in M files. Raised X new observations. Please review in the lgtm UI."
+8. Go to step 1
 
 ## CLI commands
 
