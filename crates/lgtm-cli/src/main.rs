@@ -3,12 +3,11 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
 
 use lgtm_git::DiffProvider;
 use lgtm_git::cli_provider::CliDiffProvider;
-use lgtm_session::{Session, SessionStatus};
+use lgtm_session::{SessionStatus, SessionStore};
 
 #[derive(Parser)]
 #[command(name = "lgtm", about = "Local code review tool")]
@@ -114,60 +113,27 @@ async fn start(base: Option<String>, port: u16, host: String, no_open: bool) -> 
         Some(b) => b,
         None => detect_base_branch(&repo_path)?,
     };
-    let session_path = repo_path.join(".review").join("session.json");
 
     let provider = CliDiffProvider::new(&repo_path);
 
     let head = provider.head_ref().context("Failed to detect HEAD branch")?;
+    let merge_base = provider
+        .merge_base(&head, &base)
+        .context("Failed to compute merge-base")?;
 
-    let session = if session_path.exists() {
-        let existing = lgtm_session::read_session(&session_path)
-            .context("Failed to read existing session")?;
-        match existing.status {
-            SessionStatus::InProgress => {
-                tracing::info!("Resuming existing review session");
-                let merge_base = provider
-                    .merge_base(&head, &base)
-                    .context("Failed to compute merge-base")?;
-                let mut session = existing;
-                session.merge_base = merge_base;
-                session.updated_at = chrono::Utc::now();
-                session
-            }
-            _ => {
-                bail!(
-                    "Session exists with status {:?}. Run `lgtm clean` first.",
-                    existing.status
-                );
-            }
-        }
-    } else {
-        let merge_base = provider
-            .merge_base(&head, &base)
-            .context("Failed to compute merge-base")?;
-        let session = Session::new(&base, &head, &merge_base, repo_path.clone());
-        lgtm_session::write_session_atomic(&session_path, &session)?;
-        session
-    };
+    let store_dir = repo_path.join(".review").join("sessions");
+    let store = Arc::new(SessionStore::new(store_dir));
+    store.load().ok();
 
-    // Clean up stale submit marker from previous sessions
-    let submit_path = repo_path.join(".review").join(".submit");
-    if submit_path.exists() {
-        let _ = std::fs::remove_file(&submit_path);
-    }
+    let session = store
+        .create(&base, &head, &merge_base, repo_path.clone())
+        .context("Failed to create session")?;
 
-    let (broadcast_tx, _) = tokio::sync::broadcast::channel(64);
-
-    let state = Arc::new(lgtm_server::AppState {
-        session: RwLock::new(session),
-        session_path,
-        diff_provider: Box::new(provider),
-        repo_path: repo_path.clone(),
-        broadcast_tx,
-    });
+    let state = Arc::new(lgtm_server::AppState::new(store));
+    state.register_session(session.id, Box::new(provider));
 
     // Start file watchers
-    lgtm_server::watcher::start_watchers(state.clone())
+    lgtm_server::watcher::start_watchers(state.clone(), session.id, repo_path.clone())
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let app = lgtm_server::create_router(state);

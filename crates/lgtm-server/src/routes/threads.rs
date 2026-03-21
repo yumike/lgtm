@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 use lgtm_session::{Author, Comment, DiffSide, Origin, Severity, Thread, ThreadStatus};
 use crate::AppState;
+use crate::routes::sessions::parse_id;
 
 #[derive(Deserialize)]
 pub struct CreateThread {
@@ -24,9 +25,10 @@ pub struct CreateThread {
 
 pub async fn create_thread(
     State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
     Json(body): Json<CreateThread>,
 ) -> Result<Json<Thread>, (StatusCode, Json<serde_json::Value>)> {
-    let mut session = state.session.write().await;
+    let id = parse_id(&session_id)?;
     let now = chrono::Utc::now();
 
     let author = match body.origin {
@@ -53,9 +55,16 @@ pub async fn create_thread(
         }],
     };
 
-    session.threads.push(thread.clone());
-    session.updated_at = now;
-    persist_session(&state, &session)?;
+    let thread_clone = thread.clone();
+    state.store.update(id, |s| {
+        s.threads.push(thread_clone);
+    }).map_err(|e| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+
     Ok(Json(thread))
 }
 
@@ -66,19 +75,11 @@ pub struct AddComment {
 
 pub async fn add_comment(
     State(state): State<Arc<AppState>>,
-    Path(thread_id): Path<String>,
+    Path((session_id, thread_id)): Path<(String, String)>,
     Json(body): Json<AddComment>,
 ) -> Result<Json<Comment>, (StatusCode, Json<serde_json::Value>)> {
-    let mut session = state.session.write().await;
+    let id = parse_id(&session_id)?;
     let now = chrono::Utc::now();
-
-    let thread = session.threads.iter_mut().find(|t| t.id == thread_id);
-    let Some(thread) = thread else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "thread not found" })),
-        ));
-    };
 
     let comment = Comment {
         id: ulid::Ulid::new().to_string(),
@@ -88,9 +89,28 @@ pub async fn add_comment(
         diff_snapshot: None,
     };
 
-    thread.comments.push(comment.clone());
-    session.updated_at = now;
-    persist_session(&state, &session)?;
+    let comment_clone = comment.clone();
+    let tid = thread_id.clone();
+    let session = state.store.update(id, move |s| {
+        if let Some(thread) = s.threads.iter_mut().find(|t| t.id == tid) {
+            thread.comments.push(comment_clone);
+        }
+    }).map_err(|e| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+
+    // Check if thread was actually found
+    let thread = session.threads.iter().find(|t| t.id == thread_id);
+    if thread.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "thread not found" })),
+        ));
+    }
+
     Ok(Json(comment))
 }
 
@@ -101,11 +121,18 @@ pub struct PatchThread {
 
 pub async fn patch_thread(
     State(state): State<Arc<AppState>>,
-    Path(thread_id): Path<String>,
+    Path((session_id, thread_id)): Path<(String, String)>,
     Json(body): Json<PatchThread>,
 ) -> Result<Json<Thread>, (StatusCode, Json<serde_json::Value>)> {
-    let mut session = state.session.write().await;
-    let now = chrono::Utc::now();
+    let id = parse_id(&session_id)?;
+
+    // First get session to validate
+    let session = state.store.get(id).map_err(|e| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
 
     let thread_idx = session.threads.iter().position(|t| t.id == thread_id);
     let Some(idx) = thread_idx else {
@@ -123,41 +150,41 @@ pub async fn patch_thread(
         ));
     }
 
-    session.threads[idx].status = body.status;
-    session.updated_at = now;
-    let thread = session.threads[idx].clone();
-    persist_session(&state, &session)?;
-    Ok(Json(thread))
-}
-
-pub fn persist_session(
-    state: &AppState,
-    session: &lgtm_session::Session,
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    let lock_path = state.session_path.with_file_name(".lock");
-    let _lock = lgtm_session::acquire_lock(&lock_path).map_err(|e| {
+    let tid = thread_id.clone();
+    let status = body.status;
+    let updated = state.store.update(id, move |s| {
+        if let Some(thread) = s.threads.iter_mut().find(|t| t.id == tid) {
+            thread.status = status;
+        }
+    }).map_err(|e| {
         (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": e.to_string() })),
         )
     })?;
-    lgtm_session::write_session_atomic(&state.session_path, session).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-    })
+
+    let thread = updated.threads.iter().find(|t| t.id == thread_id).unwrap().clone();
+    Ok(Json(thread))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::test_helpers::create_test_app;
+    use crate::test_helpers::{test_state, MockDiffProvider};
+
+    fn test_app_with_session() -> (axum_test::TestServer, lgtm_session::Session) {
+        let state = test_state();
+        let session = state.store.create("main", "feature/test", "abc1234", std::path::PathBuf::from("/tmp/repo")).unwrap();
+        state.register_session(session.id, Box::new(MockDiffProvider));
+        let app = crate::create_router(state);
+        let server = axum_test::TestServer::new(app).unwrap();
+        (server, session)
+    }
 
     #[tokio::test]
     async fn test_create_thread() {
-        let server = create_test_app().await;
+        let (server, session) = test_app_with_session();
         let resp = server
-            .post("/api/threads")
+            .post(&format!("/api/sessions/{}/threads", session.id))
             .json(&serde_json::json!({
                 "file": "src/main.rs",
                 "line_start": 10,
@@ -176,9 +203,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_comment_to_thread() {
-        let server = create_test_app().await;
+        let (server, session) = test_app_with_session();
         let resp = server
-            .post("/api/threads")
+            .post(&format!("/api/sessions/{}/threads", session.id))
             .json(&serde_json::json!({
                 "file": "src/main.rs",
                 "line_start": 10,
@@ -191,7 +218,7 @@ mod tests {
         let thread: lgtm_session::Thread = resp.json();
 
         let resp = server
-            .post(&format!("/api/threads/{}/comments", thread.id))
+            .post(&format!("/api/sessions/{}/threads/{}/comments", session.id, thread.id))
             .json(&serde_json::json!({
                 "body": "Reply comment"
             }))
@@ -201,9 +228,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_patch_thread_resolve() {
-        let server = create_test_app().await;
+        let (server, session) = test_app_with_session();
         let resp = server
-            .post("/api/threads")
+            .post(&format!("/api/sessions/{}/threads", session.id))
             .json(&serde_json::json!({
                 "file": "src/main.rs",
                 "line_start": 10,
@@ -216,7 +243,7 @@ mod tests {
         let thread: lgtm_session::Thread = resp.json();
 
         let resp = server
-            .patch(&format!("/api/threads/{}", thread.id))
+            .patch(&format!("/api/sessions/{}/threads/{}", session.id, thread.id))
             .json(&serde_json::json!({ "status": "resolved" }))
             .await;
         resp.assert_status_ok();
@@ -226,9 +253,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_patch_nonexistent_thread_returns_404() {
-        let server = create_test_app().await;
+        let (server, session) = test_app_with_session();
         let resp = server
-            .patch("/api/threads/nonexistent")
+            .patch(&format!("/api/sessions/{}/threads/nonexistent", session.id))
             .json(&serde_json::json!({ "status": "resolved" }))
             .await;
         resp.assert_status(axum::http::StatusCode::NOT_FOUND);
@@ -236,9 +263,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_agent_thread() {
-        let server = create_test_app().await;
+        let (server, session) = test_app_with_session();
         let resp = server
-            .post("/api/threads")
+            .post(&format!("/api/sessions/{}/threads", session.id))
             .json(&serde_json::json!({
                 "file": "src/main.rs",
                 "line_start": 5,
@@ -259,9 +286,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_dismiss_agent_thread() {
-        let server = create_test_app().await;
+        let (server, session) = test_app_with_session();
         let resp = server
-            .post("/api/threads")
+            .post(&format!("/api/sessions/{}/threads", session.id))
             .json(&serde_json::json!({
                 "file": "src/main.rs",
                 "line_start": 5,
@@ -276,7 +303,7 @@ mod tests {
         let thread: lgtm_session::Thread = resp.json();
 
         let resp = server
-            .patch(&format!("/api/threads/{}", thread.id))
+            .patch(&format!("/api/sessions/{}/threads/{}", session.id, thread.id))
             .json(&serde_json::json!({ "status": "dismissed" }))
             .await;
         resp.assert_status_ok();
@@ -286,9 +313,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_dismiss_developer_thread_rejected() {
-        let server = create_test_app().await;
+        let (server, session) = test_app_with_session();
         let resp = server
-            .post("/api/threads")
+            .post(&format!("/api/sessions/{}/threads", session.id))
             .json(&serde_json::json!({
                 "file": "src/main.rs",
                 "line_start": 5,
@@ -301,7 +328,7 @@ mod tests {
         let thread: lgtm_session::Thread = resp.json();
 
         let resp = server
-            .patch(&format!("/api/threads/{}", thread.id))
+            .patch(&format!("/api/sessions/{}/threads/{}", session.id, thread.id))
             .json(&serde_json::json!({ "status": "dismissed" }))
             .await;
         resp.assert_status(axum::http::StatusCode::UNPROCESSABLE_ENTITY);

@@ -2,38 +2,22 @@
 use std::sync::Arc;
 
 #[cfg(test)]
-use axum_test::TestServer;
-#[cfg(test)]
-use tokio::sync::RwLock;
+use lgtm_session::SessionStore;
 
 #[cfg(test)]
 use crate::AppState;
 
 #[cfg(test)]
-pub async fn create_test_app() -> TestServer {
-    let dir = tempfile::TempDir::new().expect("failed to create temp dir");
-    let review_dir = dir.path().join(".review");
-    std::fs::create_dir_all(&review_dir).expect("failed to create .review dir");
-    let session_path = review_dir.join("session.json");
-    let repo_path = dir.path().to_path_buf();
-    // Prevent cleanup so that files created during the test persist for the test's lifetime
+pub fn test_state() -> Arc<AppState> {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_path_buf();
     std::mem::forget(dir);
-
-    let session = lgtm_session::Session::new("main", "feature/test", "abc1234", repo_path.clone());
-    let (broadcast_tx, _) = tokio::sync::broadcast::channel(32);
-    let state = Arc::new(AppState {
-        session: RwLock::new(session),
-        session_path,
-        diff_provider: Box::new(MockDiffProvider),
-        repo_path,
-        broadcast_tx,
-    });
-    let app = crate::create_router(state);
-    TestServer::new(app).unwrap()
+    let store = Arc::new(SessionStore::new(path));
+    Arc::new(AppState::new(store))
 }
 
 #[cfg(test)]
-struct MockDiffProvider;
+pub struct MockDiffProvider;
 
 #[cfg(test)]
 impl lgtm_git::DiffProvider for MockDiffProvider {

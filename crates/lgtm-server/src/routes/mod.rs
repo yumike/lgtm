@@ -1,7 +1,6 @@
-pub mod assets;
 pub mod diff;
 pub mod files;
-pub mod session;
+pub mod sessions;
 pub mod submit;
 pub mod threads;
 
@@ -14,11 +13,12 @@ use crate::AppState;
 
 pub fn api_routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/session", get(session::get_session).patch(session::patch_session))
-        .route("/diff", get(diff::get_diff))
-        .route("/threads", post(threads::create_thread))
-        .route("/threads/{id}/comments", post(threads::add_comment))
-        .route("/threads/{id}", patch(threads::patch_thread))
-        .route("/files", patch(files::patch_file))
-        .route("/submit", post(submit::post_submit).get(submit::get_submit))
+        .route("/sessions", post(sessions::create_session).get(sessions::list_sessions))
+        .route("/sessions/{id}", get(sessions::get_session).patch(sessions::patch_session).delete(sessions::delete_session))
+        .route("/sessions/{id}/diff", get(diff::get_diff))
+        .route("/sessions/{id}/threads", post(threads::create_thread))
+        .route("/sessions/{id}/threads/{tid}/comments", post(threads::add_comment))
+        .route("/sessions/{id}/threads/{tid}", patch(threads::patch_thread))
+        .route("/sessions/{id}/files", patch(files::patch_file))
+        .route("/sessions/{id}/submit", post(submit::post_submit).get(submit::get_submit))
 }
