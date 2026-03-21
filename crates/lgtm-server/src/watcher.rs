@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
@@ -7,6 +8,60 @@ use ulid::Ulid;
 
 use crate::AppState;
 use crate::ws::WsMessage;
+
+struct WatcherEntry {
+    session_ids: Vec<Ulid>,
+    _handle: Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>,
+}
+
+pub struct WatcherRegistry {
+    watchers: RwLock<HashMap<PathBuf, WatcherEntry>>,
+}
+
+impl WatcherRegistry {
+    pub fn new() -> Self {
+        Self {
+            watchers: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub fn register(&self, repo_path: PathBuf, session_id: Ulid) {
+        let mut watchers = self.watchers.write().unwrap();
+        let entry = watchers.entry(repo_path).or_insert_with(|| WatcherEntry {
+            session_ids: Vec::new(),
+            _handle: None,
+        });
+        if !entry.session_ids.contains(&session_id) {
+            entry.session_ids.push(session_id);
+        }
+    }
+
+    pub fn unregister(&self, repo_path: &PathBuf, session_id: Ulid) {
+        let mut watchers = self.watchers.write().unwrap();
+        let should_remove = if let Some(entry) = watchers.get_mut(repo_path) {
+            entry.session_ids.retain(|&id| id != session_id);
+            entry.session_ids.is_empty()
+        } else {
+            false
+        };
+        if should_remove {
+            watchers.remove(repo_path);
+        }
+    }
+
+    pub fn repo_count(&self) -> usize {
+        self.watchers.read().unwrap().len()
+    }
+
+    pub fn session_ids_for_repo(&self, repo_path: &PathBuf) -> Vec<Ulid> {
+        self.watchers
+            .read()
+            .unwrap()
+            .get(repo_path)
+            .map(|entry| entry.session_ids.clone())
+            .unwrap_or_default()
+    }
+}
 
 /// Start file watchers for a specific session.
 pub fn start_watchers(
@@ -101,4 +156,95 @@ pub fn start_watchers(
     let _ = store_dir;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_watcher_registry_deduplication() {
+        let registry = WatcherRegistry::new();
+        let id1 = Ulid::new();
+        let id2 = Ulid::new();
+        let repo = PathBuf::from("/tmp/repo");
+
+        registry.register(repo.clone(), id1);
+        registry.register(repo.clone(), id2);
+        assert_eq!(registry.repo_count(), 1);
+
+        registry.unregister(&repo, id1);
+        assert_eq!(registry.repo_count(), 1);
+
+        registry.unregister(&repo, id2);
+        assert_eq!(registry.repo_count(), 0);
+    }
+
+    #[test]
+    fn test_watcher_registry_multiple_repos() {
+        let registry = WatcherRegistry::new();
+        let id1 = Ulid::new();
+        let id2 = Ulid::new();
+        let repo_a = PathBuf::from("/tmp/repo-a");
+        let repo_b = PathBuf::from("/tmp/repo-b");
+
+        registry.register(repo_a.clone(), id1);
+        registry.register(repo_b.clone(), id2);
+        assert_eq!(registry.repo_count(), 2);
+
+        registry.unregister(&repo_a, id1);
+        assert_eq!(registry.repo_count(), 1);
+
+        registry.unregister(&repo_b, id2);
+        assert_eq!(registry.repo_count(), 0);
+    }
+
+    #[test]
+    fn test_watcher_registry_session_ids_for_repo() {
+        let registry = WatcherRegistry::new();
+        let id1 = Ulid::new();
+        let id2 = Ulid::new();
+        let repo = PathBuf::from("/tmp/repo");
+
+        registry.register(repo.clone(), id1);
+        registry.register(repo.clone(), id2);
+
+        let ids = registry.session_ids_for_repo(&repo);
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&id1));
+        assert!(ids.contains(&id2));
+    }
+
+    #[test]
+    fn test_watcher_registry_duplicate_register() {
+        let registry = WatcherRegistry::new();
+        let id1 = Ulid::new();
+        let repo = PathBuf::from("/tmp/repo");
+
+        registry.register(repo.clone(), id1);
+        registry.register(repo.clone(), id1);
+
+        let ids = registry.session_ids_for_repo(&repo);
+        assert_eq!(ids.len(), 1);
+    }
+
+    #[test]
+    fn test_watcher_registry_unregister_nonexistent() {
+        let registry = WatcherRegistry::new();
+        let id1 = Ulid::new();
+        let repo = PathBuf::from("/tmp/repo");
+
+        // Should not panic
+        registry.unregister(&repo, id1);
+        assert_eq!(registry.repo_count(), 0);
+    }
+
+    #[test]
+    fn test_watcher_registry_session_ids_for_unknown_repo() {
+        let registry = WatcherRegistry::new();
+        let repo = PathBuf::from("/tmp/unknown");
+
+        let ids = registry.session_ids_for_repo(&repo);
+        assert!(ids.is_empty());
+    }
 }
