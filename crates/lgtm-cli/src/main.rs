@@ -1,13 +1,5 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use anyhow::{Context, Result, bail};
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
-
-use lgtm_git::DiffProvider;
-use lgtm_git::cli_provider::CliDiffProvider;
-use lgtm_session::{SessionStatus, SessionStore};
 
 #[derive(Parser)]
 #[command(name = "lgtm", about = "Local code review tool")]
@@ -18,16 +10,27 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Commands {
+    /// Start a review session
+    Start {
+        /// Base branch or commit to diff against
+        #[arg(long, default_value = "main")]
+        base: String,
+    },
     /// Show review session status
     Status {
-        /// Output as JSON (required for now)
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
-
+    /// Wait for developer to submit review comments, then print open threads
+    Fetch {
+        /// Timeout in seconds (default: wait indefinitely)
+        #[arg(long)]
+        timeout: Option<u64>,
+    },
     /// Reply to a review thread
     Reply {
-        /// Thread ID (e.g., t_01J8XYZABC)
+        /// Thread ID
         thread_id: String,
         /// Comment body (omit to read from --stdin)
         body: Option<String>,
@@ -35,14 +38,6 @@ enum Commands {
         #[arg(long)]
         stdin: bool,
     },
-
-    /// Wait for developer to submit review comments, then print open threads
-    Fetch {
-        /// Timeout in seconds (default: wait indefinitely)
-        #[arg(long)]
-        timeout: Option<u64>,
-    },
-
     /// Create an agent-initiated review thread
     Thread {
         /// File path relative to repo root
@@ -63,114 +58,201 @@ enum Commands {
         #[arg(long)]
         stdin: bool,
     },
-
-    /// Start a review session
-    Start {
-        /// Base branch or commit to diff against (auto-detects main/master if omitted)
+    /// Approve the current review session
+    Approve,
+    /// Abandon the current review session
+    Abandon,
+    /// Show the diff for the current session
+    Diff {
+        /// Show diffstat summary only
         #[arg(long)]
-        base: Option<String>,
-
-        /// Web server port
-        #[arg(long, default_value = "4567")]
-        port: u16,
-
-        /// Bind address
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
-
-        /// Don't open browser automatically
-        #[arg(long)]
-        no_open: bool,
+        stat: bool,
     },
+    /// Delete the current review session
+    Clean,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
     let cli = Cli::parse();
 
-    match cli.command {
-        Commands::Status { json } => status(json)?,
-        Commands::Fetch { timeout } => fetch(timeout)?,
-        Commands::Reply { thread_id, body, stdin } => reply(thread_id, body, stdin)?,
+    let result = match cli.command {
+        Commands::Start { base } => cmd_start(base),
+        Commands::Status { json } => cmd_status(json),
+        Commands::Fetch { timeout } => cmd_fetch(timeout),
+        Commands::Reply { thread_id, body, stdin } => cmd_reply(thread_id, body, stdin),
         Commands::Thread { file, line, line_end, severity, body, stdin } => {
-            create_thread(file, line, line_end, severity, body, stdin)?
+            cmd_thread(file, line, line_end, severity, body, stdin)
         }
-        Commands::Start { base, port, host, no_open } => {
-            start(base, port, host, no_open).await?
-        }
-    }
-
-    Ok(())
-}
-
-async fn start(base: Option<String>, port: u16, host: String, no_open: bool) -> Result<()> {
-    let repo_path = find_repo_root()?;
-    let base = match base {
-        Some(b) => b,
-        None => detect_base_branch(&repo_path)?,
+        Commands::Approve => cmd_approve(),
+        Commands::Abandon => cmd_abandon(),
+        Commands::Diff { stat } => cmd_diff(stat),
+        Commands::Clean => cmd_clean(),
     };
 
-    let provider = CliDiffProvider::new(&repo_path);
+    if let Err(msg) = result {
+        eprintln!("Error: {msg}");
+        std::process::exit(1);
+    }
+}
 
-    let head = provider.head_ref().context("Failed to detect HEAD branch")?;
-    let merge_base = provider
-        .merge_base(&head, &base)
-        .context("Failed to compute merge-base")?;
+// ---------------------------------------------------------------------------
+// Helper functions
+// ---------------------------------------------------------------------------
 
-    let store_dir = repo_path.join(".review").join("sessions");
-    let store = Arc::new(SessionStore::new(store_dir));
-    store.load().ok();
+fn find_repo_root() -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|e| format!("git failed: {}", e))?;
+    if !output.status.success() {
+        return Err("not a git repository".into());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
 
-    let session = store
-        .create(&base, &head, &merge_base, repo_path.clone())
-        .context("Failed to create session")?;
+fn git_head_ref(repo_path: &str) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("git failed: {}", e))?;
+    if !output.status.success() {
+        return Err("failed to get HEAD ref".into());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
 
-    let state = Arc::new(lgtm_server::AppState::new(store));
-    state.register_session(session.id, Box::new(provider));
+fn discover_server() -> Result<lgtm_server::lockfile::ServerInfo, String> {
+    let path = lgtm_server::lockfile::lockfile_path();
+    match lgtm_server::lockfile::read_lockfile(&path) {
+        Ok(Some(info)) => {
+            if lgtm_server::lockfile::is_pid_alive(info.pid) {
+                Ok(info)
+            } else {
+                let _ = lgtm_server::lockfile::remove_lockfile(&path);
+                Err("lgtm app not running (stale lockfile cleaned up)".into())
+            }
+        }
+        Ok(None) => Err("lgtm app not running. Launch lgtm-app first.".into()),
+        Err(e) => Err(format!("failed to read lockfile: {}", e)),
+    }
+}
 
-    // Start file watchers
-    lgtm_server::watcher::start_watchers(state.clone(), session.id, repo_path.clone())
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+fn launch_app() -> Result<lgtm_server::lockfile::ServerInfo, String> {
+    let app_path = which::which("lgtm-app")
+        .map_err(|_| "lgtm-app not installed".to_string())?;
+    std::process::Command::new(app_path)
+        .spawn()
+        .map_err(|e| format!("failed to launch: {}", e))?;
+    let start = std::time::Instant::now();
+    loop {
+        if start.elapsed() > std::time::Duration::from_secs(10) {
+            return Err("timed out waiting for lgtm app".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if let Ok(Some(info)) =
+            lgtm_server::lockfile::read_lockfile(&lgtm_server::lockfile::lockfile_path())
+        {
+            if lgtm_server::lockfile::is_pid_alive(info.pid) {
+                return Ok(info);
+            }
+        }
+    }
+}
 
-    let app = lgtm_server::create_router(state);
-    let addr = format!("{host}:{port}");
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+fn discover_or_launch() -> Result<lgtm_server::lockfile::ServerInfo, String> {
+    match discover_server() {
+        Ok(info) => Ok(info),
+        Err(_) => launch_app(),
+    }
+}
 
-    println!("lgtm server running at http://{addr}");
+fn base_url(info: &lgtm_server::lockfile::ServerInfo) -> String {
+    format!("http://127.0.0.1:{}", info.port)
+}
 
-    if !no_open {
-        let _ = open::that(format!("http://{addr}"));
+fn resolve_session(
+    client: &reqwest::blocking::Client,
+    base: &str,
+) -> Result<lgtm_session::Session, String> {
+    let repo_path = find_repo_root()?;
+    let head = git_head_ref(&repo_path)?;
+    let resp = client
+        .get(format!("{}/api/sessions", base))
+        .query(&[("repo_path", &repo_path), ("head", &head)])
+        .send()
+        .map_err(|e| format!("failed to connect to lgtm app: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("server returned {}", resp.status()));
+    }
+    let sessions: Vec<lgtm_session::Session> =
+        resp.json().map_err(|e| format!("bad response: {}", e))?;
+    sessions
+        .into_iter()
+        .next()
+        .ok_or_else(|| "no active session for this repo/branch".into())
+}
+
+fn read_body(body: Option<String>, stdin: bool) -> Result<String, String> {
+    if stdin {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+            .map_err(|e| format!("stdin read failed: {}", e))?;
+        Ok(buf)
+    } else {
+        body.ok_or_else(|| "body required (provide as arg or use --stdin)".into())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Command implementations
+// ---------------------------------------------------------------------------
+
+fn cmd_start(base_branch: String) -> Result<(), String> {
+    let info = discover_or_launch()?;
+    let base = base_url(&info);
+    let repo_path = find_repo_root()?;
+
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(format!("{}/api/sessions", base))
+        .json(&serde_json::json!({
+            "repo_path": repo_path,
+            "base": base_branch,
+        }))
+        .send()
+        .map_err(|e| format!("failed to connect to lgtm app: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        return Err(format!("server returned {}: {}", status, body));
     }
 
-    axum::serve(listener, app).await?;
-
+    let session: lgtm_session::Session =
+        resp.json().map_err(|e| format!("bad response: {}", e))?;
+    println!("Session started: {}", session.id);
+    println!("  {} -> {}", session.base, session.head);
     Ok(())
 }
 
-fn status(json: bool) -> Result<()> {
-    let repo_path = find_repo_root()?;
-    let session_path = repo_path.join(".review").join("session.json");
-
-    if !session_path.exists() {
-        std::process::exit(2);
-    }
-
-    let session = lgtm_session::read_session(&session_path)
-        .context("Failed to read session")?;
-
-    let stats = lgtm_session::compute_stats(&session);
+fn cmd_status(json: bool) -> Result<(), String> {
+    let info = discover_server()?;
+    let base = base_url(&info);
+    let client = reqwest::blocking::Client::new();
+    let session = resolve_session(&client, &base)?;
 
     if json {
+        let stats = lgtm_session::compute_stats(&session);
         let open_threads: Vec<&lgtm_session::Thread> = session
             .threads
             .iter()
             .filter(|t| t.status == lgtm_session::ThreadStatus::Open)
             .collect();
-
         let output = serde_json::json!({
             "session_status": session.status,
             "base": session.base,
@@ -178,23 +260,9 @@ fn status(json: bool) -> Result<()> {
             "stats": stats,
             "open_threads": open_threads,
         });
-
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
     } else {
-        let files_reviewed = session
-            .files
-            .values()
-            .filter(|s| **s == lgtm_session::FileReviewStatus::Reviewed)
-            .count();
-        let files_total = session.files.len();
-
-        let elapsed = chrono::Utc::now() - session.created_at;
-        let elapsed_str = if elapsed.num_hours() > 0 {
-            format!("{} hours ago", elapsed.num_hours())
-        } else {
-            format!("{} minutes ago", elapsed.num_minutes())
-        };
-
+        let stats = lgtm_session::compute_stats(&session);
         println!("lgtm: reviewing {} against {}", session.head, session.base);
 
         let mut parts = Vec::new();
@@ -217,352 +285,292 @@ fn status(json: bool) -> Result<()> {
             println!("  No threads yet");
         }
 
+        let files_reviewed = session
+            .files
+            .values()
+            .filter(|s| **s == lgtm_session::FileReviewStatus::Reviewed)
+            .count();
+        let files_total = session.files.len();
         println!("  {}/{} files reviewed", files_reviewed, files_total);
-        println!("  Session started {}", elapsed_str);
     }
 
     Ok(())
 }
 
-fn read_body(body: Option<String>, stdin: bool) -> Result<String> {
-    if stdin {
-        use std::io::Read;
-        let mut buf = String::new();
-        std::io::stdin().read_to_string(&mut buf)?;
-        Ok(buf.trim().to_string())
-    } else if let Some(body) = body {
-        Ok(body)
-    } else {
-        bail!("Provide body as argument or use --stdin");
+fn cmd_fetch(timeout: Option<u64>) -> Result<(), String> {
+    let info = discover_server()?;
+    let base = base_url(&info);
+    let client = reqwest::blocking::Client::new();
+    let session = resolve_session(&client, &base)?;
+
+    let ws_url = format!(
+        "ws://127.0.0.1:{}/ws/{}",
+        info.port, session.id
+    );
+
+    let (mut socket, _response) = tungstenite::connect(&ws_url)
+        .map_err(|e| format!("websocket connect failed: {}", e))?;
+
+    let deadline = timeout.map(|s| std::time::Instant::now() + std::time::Duration::from_secs(s));
+
+    loop {
+        // Check timeout
+        if let Some(deadline) = deadline {
+            if std::time::Instant::now() >= deadline {
+                let output = serde_json::json!({
+                    "timed_out": true,
+                    "session_status": session.status,
+                    "base": session.base,
+                    "head": session.head,
+                    "merge_base": session.merge_base,
+                    "open_threads": [],
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                let _ = socket.close(None);
+                return Ok(());
+            }
+        }
+
+        let msg = socket.read();
+        match msg {
+            Ok(tungstenite::Message::Text(text)) => {
+                if let Ok(ws_msg) = serde_json::from_str::<lgtm_server::ws::WsMessage>(&text) {
+                    match ws_msg {
+                        lgtm_server::ws::WsMessage::SubmitStatus(data) if data.pending => {
+                            // Re-fetch session to get latest state
+                            let session = resolve_session(&client, &base)?;
+                            let open_threads: Vec<&lgtm_session::Thread> = session
+                                .threads
+                                .iter()
+                                .filter(|t| {
+                                    t.status == lgtm_session::ThreadStatus::Open
+                                })
+                                .collect();
+                            let output = serde_json::json!({
+                                "session_status": session.status,
+                                "base": session.base,
+                                "head": session.head,
+                                "merge_base": session.merge_base,
+                                "open_threads": open_threads,
+                            });
+                            println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                            let _ = socket.close(None);
+                            return Ok(());
+                        }
+                        lgtm_server::ws::WsMessage::SessionUpdated(updated_session) => {
+                            if updated_session.status != lgtm_session::SessionStatus::InProgress {
+                                let output = serde_json::json!({
+                                    "session_status": updated_session.status,
+                                    "base": updated_session.base,
+                                    "head": updated_session.head,
+                                    "merge_base": updated_session.merge_base,
+                                    "open_threads": [],
+                                });
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&output).unwrap()
+                                );
+                                let _ = socket.close(None);
+                                return Ok(());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(tungstenite::Message::Close(_)) => {
+                return Err("websocket closed by server".into());
+            }
+            Err(e) => {
+                return Err(format!("websocket error: {}", e));
+            }
+            _ => {}
+        }
     }
 }
 
-fn git_head(repo_path: &std::path::Path) -> Result<String> {
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to run git rev-parse HEAD")?;
-    if !output.status.success() {
-        bail!("git rev-parse HEAD failed");
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn reply(thread_id: String, body: Option<String>, stdin: bool) -> Result<()> {
+fn cmd_reply(thread_id: String, body: Option<String>, stdin: bool) -> Result<(), String> {
     let body = read_body(body, stdin)?;
+    let info = discover_server()?;
+    let base = base_url(&info);
+    let client = reqwest::blocking::Client::new();
+    let session = resolve_session(&client, &base)?;
 
-    let repo_path = find_repo_root()?;
-    let session_path = repo_path.join(".review").join("session.json");
-    let lock_path = repo_path.join(".review").join(".lock");
+    let resp = client
+        .post(format!(
+            "{}/api/sessions/{}/threads/{}/comments",
+            base, session.id, thread_id
+        ))
+        .json(&serde_json::json!({ "body": body }))
+        .send()
+        .map_err(|e| format!("failed to connect to lgtm app: {}", e))?;
 
-    if !session_path.exists() {
-        std::process::exit(2);
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        return Err(format!("server returned {}: {}", status, body));
     }
-
-    let _lock = lgtm_session::acquire_lock(&lock_path)
-        .context("Failed to acquire lock")?;
-
-    let mut session = lgtm_session::read_session(&session_path)
-        .context("Failed to read session")?;
-
-    if session.status != SessionStatus::InProgress {
-        eprintln!("Error: session is not active (status: {:?})", session.status);
-        std::process::exit(6);
-    }
-
-    let thread = session.threads.iter_mut().find(|t| t.id == thread_id);
-    let Some(thread) = thread else {
-        eprintln!("Error: thread not found: {thread_id}");
-        std::process::exit(4);
-    };
-
-    let head = git_head(&repo_path)?;
-
-    let comment = lgtm_session::Comment {
-        id: ulid::Ulid::new().to_string(),
-        author: lgtm_session::Author::Agent,
-        body,
-        timestamp: chrono::Utc::now(),
-        diff_snapshot: Some(head),
-    };
-
-    thread.comments.push(comment);
-    session.updated_at = chrono::Utc::now();
-
-    lgtm_session::write_session_atomic(&session_path, &session)
-        .context("Failed to write session")?;
 
     Ok(())
 }
 
-fn create_thread(
+fn cmd_thread(
     file: String,
     line: u32,
     line_end: Option<u32>,
     severity: String,
     body: Option<String>,
     stdin: bool,
-) -> Result<()> {
+) -> Result<(), String> {
     let body = read_body(body, stdin)?;
     let line_end = line_end.unwrap_or(line);
 
-    let severity = match severity.as_str() {
-        "critical" => lgtm_session::Severity::Critical,
-        "warning" => lgtm_session::Severity::Warning,
-        "info" => lgtm_session::Severity::Info,
-        other => bail!("Invalid severity: {other}. Must be critical, warning, or info"),
-    };
+    // Validate severity
+    match severity.as_str() {
+        "critical" | "warning" | "info" => {}
+        other => return Err(format!("invalid severity: {other}. Must be critical, warning, or info")),
+    }
 
     let repo_path = find_repo_root()?;
-    let session_path = repo_path.join(".review").join("session.json");
-    let lock_path = repo_path.join(".review").join(".lock");
+    let info = discover_server()?;
+    let base = base_url(&info);
+    let client = reqwest::blocking::Client::new();
+    let session = resolve_session(&client, &base)?;
 
-    if !session_path.exists() {
-        std::process::exit(2);
-    }
-
-    let _lock = lgtm_session::acquire_lock(&lock_path)
-        .context("Failed to acquire lock")?;
-
-    let mut session = lgtm_session::read_session(&session_path)
-        .context("Failed to read session")?;
-
-    if session.status != SessionStatus::InProgress {
-        eprintln!("Error: session is not active (status: {:?})", session.status);
-        std::process::exit(6);
-    }
-
-    let file_path = repo_path.join(&file);
-    if !file_path.exists() {
-        eprintln!("Error: file not found: {file}");
-        std::process::exit(5);
-    }
-
+    // Read anchor context from the file
+    let file_path = format!("{}/{}", repo_path, file);
     let contents = std::fs::read_to_string(&file_path)
-        .context("Failed to read file")?;
+        .map_err(|e| format!("failed to read file {}: {}", file, e))?;
     let lines: Vec<&str> = contents.lines().collect();
-
     if line == 0 || line as usize > lines.len() {
-        eprintln!("Error: line {line} out of range (file has {} lines)", lines.len());
-        std::process::exit(5);
+        return Err(format!(
+            "line {} out of range (file has {} lines)",
+            line,
+            lines.len()
+        ));
     }
-
     let anchor_context = lines[(line - 1) as usize].to_string();
-    let head = git_head(&repo_path)?;
-    let thread_id = ulid::Ulid::new().to_string();
 
-    let thread = lgtm_session::Thread {
-        id: thread_id.clone(),
-        origin: lgtm_session::Origin::Agent,
-        severity: Some(severity),
-        status: lgtm_session::ThreadStatus::Open,
-        file,
-        line_start: line,
-        line_end,
-        diff_side: lgtm_session::DiffSide::Right,
-        anchor_context,
-        comments: vec![lgtm_session::Comment {
-            id: ulid::Ulid::new().to_string(),
-            author: lgtm_session::Author::Agent,
-            body,
-            timestamp: chrono::Utc::now(),
-            diff_snapshot: Some(head),
-        }],
-    };
+    let resp = client
+        .post(format!("{}/api/sessions/{}/threads", base, session.id))
+        .json(&serde_json::json!({
+            "file": file,
+            "line_start": line,
+            "line_end": line_end,
+            "diff_side": "right",
+            "anchor_context": anchor_context,
+            "body": body,
+            "origin": "agent",
+            "severity": severity,
+        }))
+        .send()
+        .map_err(|e| format!("failed to connect to lgtm app: {}", e))?;
 
-    session.threads.push(thread);
-    session.updated_at = chrono::Utc::now();
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        return Err(format!("server returned {}: {}", status, body));
+    }
 
-    lgtm_session::write_session_atomic(&session_path, &session)
-        .context("Failed to write session")?;
-
-    println!("{thread_id}");
+    let thread: lgtm_session::Thread =
+        resp.json().map_err(|e| format!("bad response: {}", e))?;
+    println!("{}", thread.id);
     Ok(())
 }
 
-fn detect_base_branch(repo_path: &std::path::Path) -> Result<String> {
-    for branch in ["main", "master"] {
-        let output = std::process::Command::new("git")
-            .args(["rev-parse", "--verify", &format!("refs/heads/{branch}")])
-            .current_dir(repo_path)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .context("Failed to run git")?;
-        if output.success() {
-            return Ok(branch.to_string());
-        }
-    }
-    bail!("Could not detect base branch: neither 'main' nor 'master' exists. Use --base to specify.")
-}
+fn cmd_approve() -> Result<(), String> {
+    let info = discover_server()?;
+    let base = base_url(&info);
+    let client = reqwest::blocking::Client::new();
+    let session = resolve_session(&client, &base)?;
 
-fn fetch(timeout: Option<u64>) -> Result<()> {
-    let repo_path = find_repo_root()?;
-    let review_dir = repo_path.join(".review");
-    let session_path = review_dir.join("session.json");
-    let submit_path = review_dir.join(".submit");
+    let resp = client
+        .patch(format!("{}/api/sessions/{}", base, session.id))
+        .json(&serde_json::json!({ "status": "approved" }))
+        .send()
+        .map_err(|e| format!("failed to connect to lgtm app: {}", e))?;
 
-    if !review_dir.exists() || !session_path.exists() {
-        eprintln!("Error: no review session found");
-        std::process::exit(2);
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        return Err(format!("server returned {}: {}", status, body));
     }
 
-    let session = lgtm_session::read_session(&session_path)
-        .context("Failed to read session")?;
-
-    if session.status != SessionStatus::InProgress {
-        eprintln!("Error: session is not active (status: {:?})", session.status);
-        std::process::exit(6);
-    }
-
-    // If marker already exists, pick up immediately
-    if !submit_path.exists() {
-        // Wait for .submit marker or session status change
-        if !wait_for_submit(&review_dir, &submit_path, &session_path, timeout)? {
-            // Timed out
-            let session = lgtm_session::read_session(&session_path)
-                .context("Failed to read session")?;
-            let output = serde_json::json!({
-                "timed_out": true,
-                "session_status": session.status,
-                "base": session.base,
-                "head": session.head,
-                "merge_base": session.merge_base,
-                "open_threads": [],
-            });
-            println!("{}", serde_json::to_string_pretty(&output)?);
-            return Ok(());
-        }
-    }
-
-    // Re-read session (may have changed since we started waiting)
-    let session = lgtm_session::read_session(&session_path)
-        .context("Failed to read session")?;
-
-    // Delete the marker
-    let _ = std::fs::remove_file(&submit_path);
-
-    // Check if session ended while we were waiting
-    if session.status != SessionStatus::InProgress {
-        let output = serde_json::json!({
-            "session_status": session.status,
-            "base": session.base,
-            "head": session.head,
-            "merge_base": session.merge_base,
-            "open_threads": [],
-        });
-        println!("{}", serde_json::to_string_pretty(&output)?);
-        return Ok(());
-    }
-
-    let open_threads: Vec<&lgtm_session::Thread> = session
-        .threads
-        .iter()
-        .filter(|t| t.status == lgtm_session::ThreadStatus::Open)
-        .collect();
-
-    let output = serde_json::json!({
-        "session_status": session.status,
-        "base": session.base,
-        "head": session.head,
-        "merge_base": session.merge_base,
-        "open_threads": open_threads,
-    });
-
-    println!("{}", serde_json::to_string_pretty(&output)?);
+    println!("Session approved");
     Ok(())
 }
 
-fn wait_for_submit(
-    review_dir: &std::path::Path,
-    submit_path: &std::path::Path,
-    session_path: &std::path::Path,
-    timeout: Option<u64>,
-) -> Result<bool> {
-    use std::sync::mpsc;
+fn cmd_abandon() -> Result<(), String> {
+    let info = discover_server()?;
+    let base = base_url(&info);
+    let client = reqwest::blocking::Client::new();
+    let session = resolve_session(&client, &base)?;
 
-    let (tx, rx) = mpsc::channel();
+    let resp = client
+        .patch(format!("{}/api/sessions/{}", base, session.id))
+        .json(&serde_json::json!({ "status": "abandoned" }))
+        .send()
+        .map_err(|e| format!("failed to connect to lgtm app: {}", e))?;
 
-    let submit_target = submit_path.to_path_buf();
-    let session_target = session_path.to_path_buf();
-    let mut debouncer = notify_debouncer_mini::new_debouncer(
-        std::time::Duration::from_millis(300),
-        move |events: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
-            if let Ok(events) = events {
-                for event in events {
-                    if event.kind == notify_debouncer_mini::DebouncedEventKind::Any {
-                        if event.path == submit_target {
-                            let _ = tx.send(WaitEvent::SubmitCreated);
-                            return;
-                        }
-                        if event.path == session_target {
-                            let _ = tx.send(WaitEvent::SessionChanged);
-                            return;
-                        }
-                    }
-                }
-            }
-        },
-    )
-    .context("Failed to create file watcher")?;
-
-    debouncer
-        .watcher()
-        .watch(review_dir, notify::RecursiveMode::NonRecursive)
-        .context("Failed to watch .review directory")?;
-
-    // Check again after watcher is set up (race condition window)
-    if submit_path.exists() {
-        return Ok(true);
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        return Err(format!("server returned {}: {}", status, body));
     }
 
-    let deadline = timeout.map(|s| std::time::Instant::now() + std::time::Duration::from_secs(s));
+    println!("Session abandoned");
+    Ok(())
+}
 
-    loop {
-        let recv_result = if let Some(deadline) = deadline {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                return Ok(false); // timed out
-            }
-            rx.recv_timeout(remaining)
-        } else {
-            rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
-        };
+fn cmd_diff(stat: bool) -> Result<(), String> {
+    let info = discover_server()?;
+    let base = base_url(&info);
+    let client = reqwest::blocking::Client::new();
+    let session = resolve_session(&client, &base)?;
 
-        match recv_result {
-            Ok(WaitEvent::SubmitCreated) => return Ok(true),
-            Ok(WaitEvent::SessionChanged) => {
-                // Check if session status changed to approved/abandoned
-                if let Ok(session) = lgtm_session::read_session(session_path) {
-                    if session.status != SessionStatus::InProgress {
-                        return Ok(true); // session ended, unblock
-                    }
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => return Ok(false),
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                bail!("File watcher disconnected unexpectedly");
-            }
+    let resp = client
+        .get(format!("{}/api/sessions/{}/diff", base, session.id))
+        .send()
+        .map_err(|e| format!("failed to connect to lgtm app: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        return Err(format!("server returned {}: {}", status, body));
+    }
+
+    let files: Vec<lgtm_git::DiffFile> =
+        resp.json().map_err(|e| format!("bad response: {}", e))?;
+
+    if stat {
+        for file in &files {
+            println!("{}\t{:?}", file.path, file.status);
         }
-    }
-}
-
-enum WaitEvent {
-    SubmitCreated,
-    SessionChanged,
-}
-
-fn find_repo_root() -> Result<PathBuf> {
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .context("Failed to run git")?;
-
-    if !output.status.success() {
-        bail!("Not in a git repository");
+        println!("{} files changed", files.len());
+    } else {
+        println!("{}", serde_json::to_string_pretty(&files).unwrap());
     }
 
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok(PathBuf::from(path))
+    Ok(())
+}
+
+fn cmd_clean() -> Result<(), String> {
+    let info = discover_server()?;
+    let base = base_url(&info);
+    let client = reqwest::blocking::Client::new();
+    let session = resolve_session(&client, &base)?;
+
+    let resp = client
+        .delete(format!("{}/api/sessions/{}", base, session.id))
+        .send()
+        .map_err(|e| format!("failed to connect to lgtm app: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        return Err(format!("server returned {}: {}", status, body));
+    }
+
+    println!("Session cleaned up");
+    Ok(())
 }

@@ -16,19 +16,9 @@ lgtm-git = { workspace = true }
 lgtm-server = { workspace = true }
 
 clap = { version = "4", features = ["derive"] }
-tokio = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-anyhow = { workspace = true }
-open = "5"
-chrono = { workspace = true }
-axum = { version = "0.8" }
-serde_json = { workspace = true }
-ulid = { workspace = true }
-notify = { workspace = true }
-notify-debouncer-mini = { workspace = true }
-
-[dev-dependencies]
-tempfile = { workspace = true }
-serde_json = { workspace = true }
-assert_cmd = { workspace = true }
+reqwest = { workspace = true }
+tungstenite = { workspace = true }
+which = { workspace = true }

@@ -8,7 +8,7 @@ use tokio::sync::broadcast;
 
 use crate::routes::sessions::parse_id;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 #[serde(rename_all = "snake_case")]
 pub enum WsMessage {
@@ -17,7 +17,7 @@ pub enum WsMessage {
     SubmitStatus(SubmitStatusData),
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct SubmitStatusData {
     pub pending: bool,
 }
