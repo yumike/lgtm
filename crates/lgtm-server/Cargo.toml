@@ -11,7 +11,7 @@ lgtm-session = { workspace = true }
 lgtm-git = { workspace = true }
 axum = { version = "0.8", features = ["ws", "macros"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["compression-gzip", "trace"] }
+tower-http = { version = "0.6", features = ["compression-gzip", "trace", "fs"] }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

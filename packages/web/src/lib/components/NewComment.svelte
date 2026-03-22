@@ -1,6 +1,9 @@
 <script lang="ts">
+  import { getContext } from 'svelte';
   import { createThread } from '../api';
   import { session } from '../stores/session';
+
+  const sessionId: string = getContext('sessionId');
   import type { DiffSide } from '../types';
 
   let { filePath, lineStart, lineEnd, diffSide, anchorContext, onsubmitted, oncancelled }: {
@@ -20,7 +23,7 @@
     if (!body.trim()) return;
     submitting = true;
     try {
-      const thread = await createThread({
+      const thread = await createThread(sessionId, {
         file: filePath,
         line_start: lineStart,
         line_end: lineEnd,

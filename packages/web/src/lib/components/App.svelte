@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, setContext } from 'svelte';
   import { session } from '../stores/session';
   import { diffFiles } from '../stores/diff';
   import { selectedFile, error } from '../stores/ui';
@@ -17,6 +17,8 @@
   }
 
   let { sessionId }: Props = $props();
+
+  setContext('sessionId', sessionId);
 
   let wsClient: ReturnType<typeof createWsClient> | null = null;
 
@@ -102,7 +104,7 @@
   .app {
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    height: 100%;
   }
 
   .header {

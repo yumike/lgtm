@@ -46,12 +46,18 @@ pub async fn create_session(
     })?;
 
     // Register if not already registered
-    {
+    let needs_watcher = {
         let providers = state.diff_providers.read().unwrap();
-        if !providers.contains_key(&session.id) {
-            drop(providers);
-            state.register_session(session.id, Box::new(provider));
-        }
+        !providers.contains_key(&session.id)
+    };
+    if needs_watcher {
+        state.register_session(session.id, Box::new(provider));
+        // Start file watcher for this repo so diff updates are broadcast
+        let _ = crate::watcher::start_watchers(
+            state.clone(),
+            session.id,
+            body.repo_path.clone(),
+        );
     }
 
     Ok((StatusCode::CREATED, Json(session)))

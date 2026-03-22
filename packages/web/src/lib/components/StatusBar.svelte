@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { getContext } from 'svelte';
   import { session } from '../stores/session';
   import { diffFiles } from '../stores/diff';
   import { submitPending } from '../stores/submit';
   import { patchSession, submitToAgent } from '../api';
+
+  const sessionId: string = getContext('sessionId');
 
   let threads = $derived($session?.threads ?? []);
   let openCount = $derived(threads.filter(t => t.status === 'open').length);
@@ -38,7 +41,7 @@
   async function submit() {
     if (!canSubmit) return;
     try {
-      await submitToAgent();
+      await submitToAgent(sessionId);
       submitPending.set(true);
     } catch {
       // toast
@@ -48,7 +51,7 @@
   async function approve() {
     if (!canApprove) return;
     try {
-      await patchSession('approved');
+      await patchSession(sessionId, 'approved');
     } catch {
       // toast
     }

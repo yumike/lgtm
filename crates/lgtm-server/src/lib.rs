@@ -54,8 +54,21 @@ impl AppState {
 }
 
 pub fn create_router(state: Arc<AppState>) -> Router {
-    Router::new()
+    create_router_with_assets(state, None)
+}
+
+pub fn create_router_with_assets(state: Arc<AppState>, assets_dir: Option<std::path::PathBuf>) -> Router {
+    let router = Router::new()
         .route("/ws/{id}", get(ws::ws_handler))
         .nest("/api", routes::api_routes())
-        .with_state(state)
+        .with_state(state);
+
+    if let Some(dir) = assets_dir {
+        router.fallback_service(
+            tower_http::services::ServeDir::new(&dir)
+                .fallback(tower_http::services::ServeFile::new(dir.join("index.html"))),
+        )
+    } else {
+        router
+    }
 }

@@ -1,7 +1,10 @@
 <script lang="ts">
+  import { getContext } from 'svelte';
   import type { Thread as ThreadType, ThreadStatus } from '../types';
   import { patchThread, addComment } from '../api';
   import { session } from '../stores/session';
+
+  const sessionId: string = getContext('sessionId');
   import Comment from './Comment.svelte';
 
   let { thread }: { thread: ThreadType } = $props();
@@ -28,7 +31,7 @@
       };
     });
     try {
-      await patchThread(thread.id, status);
+      await patchThread(sessionId, thread.id, status);
     } catch {
       // Will be corrected by WebSocket
     }
@@ -37,7 +40,7 @@
   async function submitReply() {
     if (!replyBody.trim()) return;
     try {
-      const comment = await addComment(thread.id, replyBody.trim());
+      const comment = await addComment(sessionId, thread.id, replyBody.trim());
       session.update(s => {
         if (!s) return s;
         return {

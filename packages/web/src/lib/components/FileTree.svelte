@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { getContext } from 'svelte';
   import { session } from '../stores/session';
   import { diffFiles } from '../stores/diff';
   import { selectedFile } from '../stores/ui';
   import { patchFile } from '../api';
+
+  const sessionId: string = getContext('sessionId');
 
   function getThreadCount(file: string): number {
     const s = $session;
@@ -22,7 +25,7 @@
       return { ...s, files: { ...s.files, [file]: newStatus } };
     });
     try {
-      await patchFile(file, newStatus);
+      await patchFile(sessionId, file, newStatus);
     } catch {
       // Will be corrected by next WebSocket update
     }

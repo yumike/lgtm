@@ -21,7 +21,21 @@ fn main() {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let app = lgtm_server::create_router(state_clone);
+            // Serve frontend from the web dist directory
+            let assets_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../packages/web/dist");
+            // Re-register diff providers and watchers for restored sessions
+            for session in state_clone.store.list() {
+                let provider = lgtm_git::cli_provider::CliDiffProvider::new(&session.repo_path);
+                state_clone.register_session(session.id, Box::new(provider));
+                let _ = lgtm_server::watcher::start_watchers(
+                    state_clone.clone(),
+                    session.id,
+                    session.repo_path.clone(),
+                );
+            }
+
+            let app = lgtm_server::create_router_with_assets(state_clone, Some(assets_dir));
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = listener.local_addr().unwrap().port();
 
