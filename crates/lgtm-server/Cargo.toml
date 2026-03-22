@@ -27,4 +27,4 @@ libc = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 pretty_assertions = { workspace = true }
-axum-test = "17"
+axum-test = "19"
