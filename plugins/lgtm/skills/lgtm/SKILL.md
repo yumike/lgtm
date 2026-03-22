@@ -30,6 +30,9 @@ Loop:
 ## CLI commands
 
 ```bash
+# Start a review session (launches lgtm app if not running)
+lgtm start --base main
+
 # Wait for developer to submit comments (blocks until ready)
 lgtm fetch
 
@@ -41,7 +44,20 @@ lgtm thread --file src/auth.py --line 71 --severity warning "Hardcoded API key �
 
 # Check session status without blocking
 lgtm status --json
+
+# Approve the session (all threads must be resolved)
+lgtm approve
+
+# Abandon the session
+lgtm abandon
+
+# Remove a session
+lgtm clean
 ```
+
+## Architecture
+
+The lgtm app is a persistent Tauri desktop application with multiple tabs (one per review session). The CLI is a thin HTTP client that communicates with the app via its local API. No per-session servers — one app handles all reviews.
 
 ## Rules
 
@@ -55,6 +71,6 @@ lgtm status --json
 
 ## Error handling
 
-- Exit code 2: no review session exists
-- Exit code 6: session is not active
-- `lgtm reply` exit code 4: thread not found — skip and continue with remaining threads
+- If the lgtm app is not running, `lgtm start` will launch it automatically
+- Connection errors mean the app is not running — run `lgtm start` first
+- `lgtm reply` with an invalid thread ID: skip and continue with remaining threads
