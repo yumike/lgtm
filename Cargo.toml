@@ -63,7 +63,7 @@ reqwest = { version = "0.12", features = ["json", "blocking"] }
 tungstenite = "0.26"
 
 # Path lookup
-which = "7"
+which = "8"
 
 # Testing
 tempfile = "3"
