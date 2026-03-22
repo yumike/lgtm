@@ -1,57 +1,52 @@
-# lgtm review protocol
+# CLAUDE.md
 
-When a file `.review/session.json` exists in the repository root, there is an active code review session. Follow this protocol when asked to address review comments.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Workflow
+## What is lgtm
 
-1. Run `lgtm fetch` — blocks until the developer clicks "Submit to agent" in the UI
-2. Check `session_status` in the output. If `approved` or `abandoned`, stop — the session is over
-3. If `open_threads` is empty, report "No open threads to address" and stop
-4. For each open thread (grouped by file, top to bottom by line number):
-   - Read the referenced file and lines (`file`, `line_start`, `line_end`)
-   - Read the full comment history in `comments` to understand what the developer is asking
-   - Fix the code
-   - Run `lgtm reply <thread_id> "explanation of what you changed"`
-5. If you discover additional issues while fixing (bugs, security problems, missing error handling), raise them:
-   `lgtm thread --file <path> --line <n> --severity <level> "description"`
-   Do not fix agent-raised issues unless the developer explicitly asks
-6. Commit changes with `[lgtm]` prefix
-7. Report summary: "Addressed N threads in M files. Raised X new observations. Please review in the lgtm UI."
+A local code review tool providing a GitHub-like review experience for branch changes. Enables a bidirectional conversation loop between a developer and an AI coding agent (Claude Code) for local code review-fix-verify cycles before code reaches a pull request.
 
-## CLI commands
+## Build & Development Commands
 
 ```bash
-# Wait for developer to submit comments (blocks until ready)
-lgtm fetch
-
-# Reply to a thread after fixing the code
-lgtm reply t_01J8XYZABC "Added exponential backoff with jitter. See lines 42-67."
-
-# Raise an observation for the developer to review
-lgtm thread --file src/auth.py --line 71 --severity warning "Hardcoded API key — should use environment variable"
-
-# Check session status without blocking
-lgtm status --json
+make dev          # Tauri dev mode with hot reload (frontend + backend)
+make build        # Full production build (web + app + cli)
+make check        # cargo check --workspace + TypeScript check
+make test         # cargo test --workspace
+make e2e          # Build web + app, then run Playwright tests
 ```
 
-## Commit strategy
+Single crate test: `cargo test -p lgtm-session`
+Single e2e test: `cd packages/web && npx playwright test -g "test name"`
 
-- Independent fixes → one commit per thread (e.g., `[lgtm] fix: add retry backoff per thread t_01J8XYZABC`)
-- Related changes touching the same code → batch into one commit (e.g., `[lgtm] fix: address auth service review comments`)
-- Trivial fixes (typos, imports) → batch together
+Frontend dev server (standalone): `cd packages/web && npm run dev`
 
-## Rules
+## Architecture
 
-- Never mark a thread as resolved or dismissed — only the developer does that
-- Never edit or delete existing comments
-- Keep replies concise — state what changed and where
-- Only raise agent threads for genuine issues — not style preferences
-- Don't fix issues you raised — unless the developer explicitly asks
-- If a thread references lines that no longer exist, explain in your reply and reference the new location
-- If you disagree with a comment, explain your reasoning — the developer will decide
+**Rust workspace** (edition 2024, rust 1.85 stable) with 5 crates:
 
-## Error handling
+- **lgtm-cli** (`crates/lgtm-cli/`) — Binary `lgtm`. Thin stateless HTTP client that auto-discovers the server via lockfile at `~/.lgtm/server.json`, launching the app if needed. Uses clap/reqwest/tungstenite.
+- **lgtm-app** (`crates/lgtm-app/`) — Binary `lgtm-app`. Tauri 2.0 native app embedding the Axum server. Supports `--headless` for server-only mode (used by e2e tests). Binds to OS-assigned port, writes lockfile.
+- **lgtm-server** (`crates/lgtm-server/`) — Core Axum HTTP server. Routes scoped per session (`/api/sessions/{id}/*`). Handles session CRUD, diffs, threads/comments, file review status, WebSocket updates, file watching.
+- **lgtm-session** (`crates/lgtm-session/`) — Session data model and SessionStore (in-memory HashMap with RwLock, persisted to `~/.lgtm/sessions/{id}.json`). Atomic writes via tmp+rename.
+- **lgtm-git** (`crates/lgtm-git/`) — `DiffProvider` trait with `CliDiffProvider` impl that shells out to `git` CLI (no git library).
 
-- Exit code 2: no review session exists
-- Exit code 6: session is not active
-- `lgtm reply` exit code 4: thread not found — skip and continue with remaining threads
+**Frontend** (`packages/web/`) — Svelte 5 + Vite 8 + TypeScript. Key modules: `src/lib/api.ts` (HTTP client), `src/lib/ws.ts` (WebSocket), `src/lib/stores/` (Svelte stores), `src/lib/components/` (UI components). Syntax highlighting via Shiki.
+
+**Single app, multiple sessions**: One persistent Tauri app on one port manages all review sessions. CLI discovers it via lockfile.
+
+## Key Design Decisions
+
+- **ULID IDs** everywhere — sortable, no coordination needed, both UI and agent generate independently
+- **Atomic session writes** — write to `.tmp`, rename for concurrency safety
+- **File blob hashing** — `reviewed_hash` on file review status auto-resets if file is modified after review
+- **WebSocket** for real-time updates from file watcher + session changes
+- **No external git library** — CliDiffProvider shells out to `git` for portability
+
+## E2E Tests
+
+Playwright tests in `packages/web/e2e/`. The fixture (`fixtures.ts`) starts lgtm-app in headless mode, creates a temporary git repo with test branches, and captures the server port from stdout.
+
+## Spec
+
+`lgtm-spec.md` at repo root is the comprehensive protocol specification.
