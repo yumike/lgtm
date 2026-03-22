@@ -1,4 +1,4 @@
-.PHONY: dev build run check test clean
+.PHONY: dev build run check test e2e clean
 
 # Build frontend and run Tauri app in dev mode (hot reload)
 dev:
@@ -28,6 +28,11 @@ check:
 # Run all tests
 test:
 	cargo test --workspace
+
+# Run e2e tests
+e2e: build-web
+	cargo build -p lgtm-app
+	cd packages/web && npx playwright test
 
 # Remove build artifacts
 clean:
