@@ -18,11 +18,17 @@ pub struct WatcherRegistry {
     watchers: RwLock<HashMap<PathBuf, WatcherEntry>>,
 }
 
-impl WatcherRegistry {
-    pub fn new() -> Self {
+impl Default for WatcherRegistry {
+    fn default() -> Self {
         Self {
             watchers: RwLock::new(HashMap::new()),
         }
+    }
+}
+
+impl WatcherRegistry {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn register(&self, repo_path: PathBuf, session_id: Ulid) {
@@ -146,14 +152,11 @@ pub fn start_watchers(
     });
 
     // Store directory watcher (300ms debounce) for session file changes
-    let store_dir = {
-        // Access the store's directory indirectly through session persistence
-        // The store persists to its own dir, so we watch that via session updates
-        // For now, session changes go through the store which handles persistence
-        let _ = state;
-        let _ = repo_path_for_closure;
-    };
-    let _ = store_dir;
+    // Access the store's directory indirectly through session persistence
+    // The store persists to its own dir, so we watch that via session updates
+    // For now, session changes go through the store which handles persistence
+    let _ = state;
+    let _ = repo_path_for_closure;
 
     Ok(())
 }

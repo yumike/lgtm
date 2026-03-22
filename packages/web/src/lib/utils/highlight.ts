@@ -47,7 +47,11 @@ const extToLang: Record<string, string> = {
   svelte: 'html',
 };
 
-export function langFromPath(path: string): string {
+export function langFromPath(path: string): (typeof defaultLangs)[number] | undefined {
   const ext = path.split('.').pop() ?? '';
-  return extToLang[ext] ?? 'text';
+  const lang = extToLang[ext];
+  if (lang && defaultLangs.includes(lang as (typeof defaultLangs)[number])) {
+    return lang as (typeof defaultLangs)[number];
+  }
+  return undefined;
 }

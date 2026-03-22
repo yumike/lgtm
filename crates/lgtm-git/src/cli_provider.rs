@@ -19,7 +19,7 @@ impl CliDiffProvider {
             .args(args)
             .current_dir(&self.repo_path)
             .output()
-            .map_err(|e| GitError::Io(e))?;
+            .map_err(GitError::Io)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -63,7 +63,7 @@ impl DiffProvider for CliDiffProvider {
             };
             let final_path = if status == FileChangeKind::Renamed {
                 old_path.as_ref().map_or(path, |_| {
-                    path.splitn(2, '\t').nth(1).unwrap_or(path)
+                    path.split_once('\t').map_or(path, |x| x.1)
                 })
             } else {
                 path
@@ -157,7 +157,7 @@ fn parse_unified_diff(diff_output: &str) -> Vec<Hunk> {
                 });
                 old_line += 1;
             } else if line.starts_with(' ') || line.is_empty() {
-                let content = if line.starts_with(' ') { &line[1..] } else { "" };
+                let content = line.strip_prefix(' ').unwrap_or("");
                 hunk.lines.push(DiffLine {
                     kind: LineKind::Context,
                     content: content.to_string(),

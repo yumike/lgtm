@@ -78,7 +78,7 @@ pub async fn list_sessions(
         .into_iter()
         .filter(|s| {
             if let Some(ref rp) = query.repo_path {
-                if s.repo_path != PathBuf::from(rp) {
+                if s.repo_path != std::path::Path::new(rp) {
                     return false;
                 }
             }
