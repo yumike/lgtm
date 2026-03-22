@@ -1,22 +1,28 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { session } from './lib/stores/session';
-  import { diffFiles } from './lib/stores/diff';
-  import { selectedFile, error } from './lib/stores/ui';
-  import { submitPending } from './lib/stores/submit';
-  import { getSession, getDiff, getSubmitStatus } from './lib/api';
-  import { createWsClient } from './lib/ws';
-  import FileTree from './lib/components/FileTree.svelte';
-  import DiffView from './lib/components/DiffView.svelte';
-  import StatusBar from './lib/components/StatusBar.svelte';
-  import Toast from './lib/components/Toast.svelte';
-  import type { DiffFile } from './lib/types';
+  import { session } from '../stores/session';
+  import { diffFiles } from '../stores/diff';
+  import { selectedFile, error } from '../stores/ui';
+  import { submitPending } from '../stores/submit';
+  import { getSession, getDiff, getSubmitStatus } from '../api';
+  import { createWsClient } from '../ws';
+  import FileTree from './FileTree.svelte';
+  import DiffView from './DiffView.svelte';
+  import StatusBar from './StatusBar.svelte';
+  import Toast from './Toast.svelte';
+  import type { DiffFile } from '../types';
+
+  interface Props {
+    sessionId: string;
+  }
+
+  let { sessionId }: Props = $props();
 
   let wsClient: ReturnType<typeof createWsClient> | null = null;
 
   async function loadState() {
     try {
-      const [s, d] = await Promise.all([getSession(), getDiff()]);
+      const [s, d] = await Promise.all([getSession(sessionId), getDiff(sessionId)]);
       session.set(s);
       diffFiles.set(d);
       if (d.length > 0 && !$selectedFile) {
@@ -37,9 +43,10 @@
 
   onMount(async () => {
     await loadState();
-    getSubmitStatus().then(s => submitPending.set(s.pending)).catch(() => {});
+    getSubmitStatus(sessionId).then(s => submitPending.set(s.pending)).catch(() => {});
 
     wsClient = createWsClient(
+      sessionId,
       (msg) => {
         if (msg.type === 'session_updated') {
           session.set(msg.data);

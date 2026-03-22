@@ -1,8 +1,4 @@
-import { mount } from 'svelte'
-import App from './App.svelte'
+import Shell from './lib/components/Shell.svelte';
+import { mount } from 'svelte';
 
-const app = mount(App, {
-  target: document.getElementById('app')!,
-})
-
-export default app
+mount(Shell, { target: document.getElementById('app')! });
