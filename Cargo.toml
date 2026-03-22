@@ -12,7 +12,6 @@ license = "MIT"
 # Internal crates
 lgtm-session = { path = "crates/lgtm-session" }
 lgtm-git = { path = "crates/lgtm-git" }
-lgtm-assets = { path = "crates/lgtm-assets" }
 lgtm-server = { path = "crates/lgtm-server" }
 
 # Tauri
@@ -56,6 +55,15 @@ notify-debouncer-mini = "0.6"
 # System
 dirs = "6"
 libc = "0.2"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+
+# WebSocket client
+tungstenite = "0.26"
+
+# Path lookup
+which = "7"
 
 # Testing
 tempfile = "3"
