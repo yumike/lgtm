@@ -1,0 +1,23 @@
+[package]
+name = "lgtm-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "lgtm-app"
+
+[dependencies]
+lgtm-server.workspace = true
+lgtm-session.workspace = true
+lgtm-git.workspace = true
+tauri.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true
+url.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true

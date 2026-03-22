@@ -1,0 +1,22 @@
+{
+  "productName": "lgtm",
+  "identifier": "dev.lgtm.app",
+  "build": {
+    "frontendDist": "../../packages/web/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev --prefix ../../packages/web",
+    "beforeBuildCommand": "npm run build --prefix ../../packages/web"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "lgtm",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600
+      }
+    ]
+  }
+}
