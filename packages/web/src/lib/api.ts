@@ -9,10 +9,8 @@ import type {
   SessionStatus,
 } from './types';
 
-const BASE = '/api';
-
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(`${BASE}${path}`, {
+  const resp = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   });
@@ -23,23 +21,42 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return resp.json();
 }
 
-export function getSession(): Promise<Session> {
-  return request('/session');
+function apiBase(sessionId: string) {
+  return `/api/sessions/${sessionId}`;
 }
 
-export function patchSession(status: SessionStatus): Promise<Session> {
-  return request('/session', {
+export async function listSessions(): Promise<Session[]> {
+  return request('/api/sessions');
+}
+
+export async function createSession(repoPath: string, base: string): Promise<Session> {
+  return request('/api/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ repo_path: repoPath, base }),
+  });
+}
+
+export async function deleteSession(sessionId: string): Promise<void> {
+  return request(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+}
+
+export function getSession(sessionId: string): Promise<Session> {
+  return request(apiBase(sessionId));
+}
+
+export function patchSession(sessionId: string, status: SessionStatus): Promise<Session> {
+  return request(apiBase(sessionId), {
     method: 'PATCH',
     body: JSON.stringify({ status }),
   });
 }
 
-export function getDiff(file?: string): Promise<DiffFile[]> {
+export function getDiff(sessionId: string, file?: string): Promise<DiffFile[]> {
   const params = file ? `?file=${encodeURIComponent(file)}` : '';
-  return request(`/diff${params}`);
+  return request(`${apiBase(sessionId)}/diff${params}`);
 }
 
-export function createThread(params: {
+export function createThread(sessionId: string, params: {
   file: string;
   line_start: number;
   line_end: number;
@@ -47,37 +64,37 @@ export function createThread(params: {
   anchor_context: string;
   body: string;
 }): Promise<Thread> {
-  return request('/threads', {
+  return request(`${apiBase(sessionId)}/threads`, {
     method: 'POST',
     body: JSON.stringify(params),
   });
 }
 
-export function addComment(threadId: string, body: string): Promise<Comment> {
-  return request(`/threads/${threadId}/comments`, {
+export function addComment(sessionId: string, threadId: string, body: string): Promise<Comment> {
+  return request(`${apiBase(sessionId)}/threads/${threadId}/comments`, {
     method: 'POST',
     body: JSON.stringify({ body }),
   });
 }
 
-export function patchThread(threadId: string, status: ThreadStatus): Promise<Thread> {
-  return request(`/threads/${threadId}`, {
+export function patchThread(sessionId: string, threadId: string, status: ThreadStatus): Promise<Thread> {
+  return request(`${apiBase(sessionId)}/threads/${threadId}`, {
     method: 'PATCH',
     body: JSON.stringify({ status }),
   });
 }
 
-export function patchFile(path: string, status: FileReviewStatus): Promise<void> {
-  return request(`/files?path=${encodeURIComponent(path)}`, {
+export function patchFile(sessionId: string, path: string, status: FileReviewStatus): Promise<void> {
+  return request(`${apiBase(sessionId)}/files?path=${encodeURIComponent(path)}`, {
     method: 'PATCH',
     body: JSON.stringify({ status }),
   });
 }
 
-export function submitToAgent(): Promise<{ pending: boolean }> {
-  return request('/submit', { method: 'POST' });
+export function submitToAgent(sessionId: string): Promise<{ pending: boolean }> {
+  return request(`${apiBase(sessionId)}/submit`, { method: 'POST' });
 }
 
-export function getSubmitStatus(): Promise<{ pending: boolean }> {
-  return request('/submit');
+export function getSubmitStatus(sessionId: string): Promise<{ pending: boolean }> {
+  return request(`${apiBase(sessionId)}/submit`);
 }

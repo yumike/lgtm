@@ -3,7 +3,7 @@ import type { WsMessage } from './types';
 type MessageHandler = (msg: WsMessage) => void;
 type ResyncHandler = () => Promise<void>;
 
-export function createWsClient(onMessage: MessageHandler, onResync: ResyncHandler) {
+export function createWsClient(sessionId: string, onMessage: MessageHandler, onResync: ResyncHandler) {
   let ws: WebSocket | null = null;
   let backoff = 1000;
   const maxBackoff = 30000;
@@ -13,7 +13,7 @@ export function createWsClient(onMessage: MessageHandler, onResync: ResyncHandle
     if (stopped) return;
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${protocol}//${location.host}/ws`);
+    ws = new WebSocket(`${protocol}//${location.host}/ws/${sessionId}`);
 
     ws.onopen = () => {
       backoff = 1000;

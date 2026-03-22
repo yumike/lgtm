@@ -9,6 +9,8 @@ export type FileChangeKind = 'added' | 'modified' | 'deleted' | 'renamed';
 export type LineKind = 'context' | 'add' | 'delete';
 
 export interface Session {
+  id: string;
+  repo_path: string;
   version: number;
   status: SessionStatus;
   base: string;
